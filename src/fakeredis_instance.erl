@@ -1,4 +1,3 @@
-
 -module(fakeredis_instance).
 -behaviour(gen_server).
 
@@ -8,8 +7,12 @@
 -export([init/1, handle_cast/2, handle_info/2, handle_call/3, terminate/2, code_change/3]).
 
 -record(state, { socket,
+                 local_address,
+                 local_port,
                  parser_state
                }).
+
+-define(STORAGE, fakeredis_cluster_storage).
 
 start_link(ListenSocket) ->
     gen_server:start_link(?MODULE, ListenSocket, []).
@@ -21,6 +24,8 @@ init(ListenSocket) ->
     io:format(user, "Listening on ~p:~p~n", [Address, Port]),
     gproc:reg({p, l, {local, Port}}),
     {ok, #state{socket = ListenSocket,
+                local_address = Address,
+                local_port = Port,
                 parser_state = eredis_parser:init()
                }}.
 
@@ -38,9 +43,10 @@ handle_call(exit, _From, State) ->
     {stop, "Exit called", State};
 handle_call(_E, _From, State) -> {noreply, State}.
 
+%% Connection calls
 handle_info({tcp, Socket, Data}, #state{socket = Socket} = State) ->
     ok = inet:setopts(Socket, [{active, once}]),
-    {noreply, handle_data(Data, State)};
+    {noreply, parse_data(Data, State)};
 handle_info({tcp_closed, _Socket}, State) -> {stop, normal, State};
 handle_info({tcp_error, _Socket, _}, State) -> {stop, normal, State};
 handle_info(E, State) ->
@@ -48,12 +54,11 @@ handle_info(E, State) ->
     {noreply, State}.
 
 terminate(_Reason, _Tab) ->
-    io:format(user, "gen_server terminated~n", []),
+    io:format(user, "fakeredis_intance terminated~n", []),
     ok.
 code_change(_OldVersion, Tab, _Extra) -> {ok, Tab}.
 
-
-handle_data(Data, #state{parser_state = ParserState} = State) ->
+parse_data(Data, #state{parser_state = ParserState} = State) ->
     case eredis_parser:parse(ParserState, Data) of
         %% Got complete request
         {ok, Value, NewParserState} ->
@@ -63,7 +68,7 @@ handle_data(Data, #state{parser_state = ParserState} = State) ->
         %% Got complete request, with extra data
         {ok, Value, Rest, NewParserState} ->
             handle_request(State, Value),
-            handle_data(Rest, #state{parser_state = NewParserState});
+            parse_data(Rest, #state{parser_state = NewParserState});
 
         %% Parser needs more data
         {continue, NewParserState} ->
@@ -75,12 +80,28 @@ handle_data(Data, #state{parser_state = ParserState} = State) ->
             {noreply, State}
     end.
 
-handle_request(#state{socket = Socket}, Value) ->
-    io:format(user, "Got request: ~p~n", [Value]),
+handle_request(#state{socket = Socket}, [<<"CLUSTER">>,<<"SLOTS">>]) ->
+    io:format(user, "Requesting CLUSTER SLOTS~n", []),
     {ok, Msg} = gen_server:call(fakeredis_cluster, cluster_slots),
+    send(Socket, Msg);
+handle_request(#state{socket = Socket}, [<<"SET">>, Key, Value | _Tail]) ->
+    io:format(user, "SET request for key: ~p and value: ~p~n", [Key, Value]),
+    ets:insert(?STORAGE, {Key, Value}),
+    Msg = fakeredis_encoder:encode(ok),
+    send(Socket, Msg);
+handle_request(#state{socket = Socket}, [<<"GET">>, Key | _Tail]) ->
+    io:format(user, "GET request for key: ~p~n", [Key]),
+    Value = case ets:lookup(?STORAGE, Key) of
+                [{Key, Val}] ->
+                    Val;
+                [] ->
+                    null_bulkstring
+            end,
+    Msg = fakeredis_encoder:encode(Value),
     send(Socket, Msg).
 
 send(Socket, Str) ->
+    io:format(user, "SEND: ~p~n", [Str]),
     ok = gen_tcp:send(Socket, Str),
     ok = inet:setopts(Socket, [{active, once}]),
     ok.

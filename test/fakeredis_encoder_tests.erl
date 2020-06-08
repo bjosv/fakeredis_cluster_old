@@ -4,6 +4,11 @@
 
 -import(fakeredis_encoder, [encode/1]).
 
+encode_simple_string_test() ->
+    T = ok,
+    Result = lists:flatten(encode(T)),
+    ?assertEqual("+OK\r\n", Result).
+
 encode_number_test() ->
     T = 5,
     Result = lists:flatten(encode(T)),
@@ -36,10 +41,25 @@ encode_array_of_many_arrays_test() ->
     Result = lists:flatten(encode(T)),
     ?assertEqual("*3\r\n*1\r\n:5\r\n*1\r\n:6\r\n*1\r\n:7\r\n", Result).
 
+encode_null_array_test() ->
+    T = null_array,
+    Result = lists:flatten(encode(T)),
+    ?assertEqual("*-1\r\n", Result).
+
 encode_bulkstring_test() ->
     T = <<"foobar">>,
     Result = lists:flatten(encode(T)),
     ?assertEqual("$6\r\nfoobar\r\n", Result).
+
+encode_empty_bulkstring_test() ->
+    T = <<"">>,
+    Result = lists:flatten(encode(T)),
+    ?assertEqual("$0\r\n\r\n", Result).
+
+encode_null_bulkstring_test() ->
+    T = null_bulkstring,
+    Result = lists:flatten(encode(T)),
+    ?assertEqual("$-1\r\n", Result).
 
 encode_cluster_nodes_test() ->
     T = [[    0,  5460, [<<"127.0.0.1">>, 30004, <<"d761377cea3f01b5e6ff6e51fa02d96f5cacf674">>],

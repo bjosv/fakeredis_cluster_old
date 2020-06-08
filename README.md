@@ -7,6 +7,13 @@ rebar3 compile
 ```
 
 ## Test
+
+```
+rebar3 eunit
+```
+
+## Tryouts
+
 ```
 rebar3 shell --apps fakeredis_cluster
 observer:start().
@@ -18,5 +25,4 @@ gproc:lookup_pids({p, l, {local, 4001}}).
 gen_server:call(fakeredis_cluster, cluster_slots).
 
 gproc:get_value({p, l, {local, 4001}}).
-
 ```
