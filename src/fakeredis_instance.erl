@@ -11,31 +11,33 @@
 -record(state, { socket,
                  local_address,
                  local_port,
+                 remote_address,
+                 remote_port,
                  parser_state
                }).
 
 start_link(ListenSocket) ->
-    gen_server:start_link(?MODULE, ListenSocket, []).
+    proc_lib:start_link(?MODULE, init, [ListenSocket]).
 
 init(ListenSocket) ->
-    %% Start accepting requests, cast this as it blocks it.
-    gen_server:cast(self(), accept),
-    {ok, {Address, Port}} = inet:sockname(ListenSocket),
-    ?DBG("Listening on ~p:~p", [Address, Port]),
-    gproc:reg({p, l, {local, Port}}),
-    {ok, #state{socket = ListenSocket,
-                local_address = Address,
-                local_port = Port,
-                parser_state = eredis_parser:init()
-               }}.
+    {ok, {LocalAddress, LocalPort}} = inet:sockname(ListenSocket),
+    gproc:reg({p, l, {local, LocalPort}}),
+    ok = proc_lib:init_ack({ok, self()}), %% Avoid block in accept/1
+    ?DBG("Listening on ~p:~p", [LocalAddress, LocalPort]),
 
-handle_cast(accept, State = #state{socket=ListenSocket}) ->
     ?DBG("Waiting for client to accept..."),
     {ok, AcceptSocket} = gen_tcp:accept(ListenSocket),
-    {ok, {Address, Port}} = inet:peername(AcceptSocket),
-    ?DBG("Client ~p:~p accepted...", [Address, Port]),
-    gproc:reg({n, l, {remote, Address, Port}}),
-    {noreply, State#state{socket=AcceptSocket}};
+    {ok, {RemoteAddress, RemotePort}} = inet:peername(AcceptSocket),
+    gproc:reg({n, l, {remote, RemoteAddress, RemotePort}}),
+    ?DBG("Client ~p:~p accepted...", [RemoteAddress, RemotePort]),
+    gen_server:enter_loop(?MODULE, [], #state{socket = AcceptSocket,
+                                              local_address = LocalAddress,
+                                              local_port = LocalPort,
+                                              remote_address = RemoteAddress,
+                                              remote_port = RemotePort,
+                                              parser_state = eredis_parser:init()
+                                             }).
+
 handle_cast(_, State) ->
     {noreply, State}.
 
