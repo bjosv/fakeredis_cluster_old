@@ -1,6 +1,8 @@
 -module(fakeredis_instance_sup).
 -behaviour(supervisor).
 
+-include("fakeredis_common.hrl").
+
 %% API
 -export([start_link/1, start_link/2]).
 
@@ -29,7 +31,7 @@ start_link(Port, MaxClients) ->
     supervisor:start_link(?SERVER(Port), ?MODULE, [Port, MaxClients]).
 
 init([Port, MaxClients]) ->
-    logger:notice("Start listening on port=~p [MaxClients=~p]", [Port, MaxClients]),
+    ?LOG("Start listening on port=~p [MaxClients=~p]", [Port, MaxClients]),
     {ok, ListenSocket} = gen_tcp:listen(Port, ?TCP_OPTIONS),
 
     spawn_link(fun() -> start_listeners(Port, MaxClients) end),

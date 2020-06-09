@@ -21,6 +21,7 @@ start_link(Ports, MaxClients) ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [Ports, MaxClients], []).
 
 init([Ports, MaxClients]) ->
+    ?LOG("Handling a CLUSTER SLOTS request: ~p", [Ports]),
     ets:new(?STORAGE, [public, set, named_table, {read_concurrency, true}]),
     [fakeredis_instance_sup:start_link(Port, MaxClients) || Port <- Ports],
     {ok, #state{ports = Ports}}.
@@ -30,7 +31,7 @@ handle_cast(_, State) ->
     {noreply, State}.
 
 handle_call(cluster_slots, _From, State) ->
-    logger:notice("Handling a CLUSTER SLOTS request"),
+    ?LOG("Handling a CLUSTER SLOTS request"),
     M = [[    0,  5460, [<<"127.0.0.1">>, 30004, <<"d761377cea3f01b5e6ff6e51fa02d96f5cacf674">>],
                         [<<"127.0.0.1">>, 30001, <<"f6198a1311df6e5b64ddd0e80e465dfab43f0b21">>]],
          [ 5461, 10922, [<<"127.0.0.1">>, 30005, <<"5aad0b87b6e8e4e0d5849da7d0d7d5b58554b9ab">>],

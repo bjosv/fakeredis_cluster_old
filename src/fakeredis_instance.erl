@@ -21,7 +21,7 @@ init(ListenSocket) ->
     %% Start accepting requests, cast this as it blocks it.
     gen_server:cast(self(), accept),
     {ok, {Address, Port}} = inet:sockname(ListenSocket),
-    logger:debug("Listening on ~p:~p", [Address, Port]),
+    ?DBG("Listening on ~p:~p", [Address, Port]),
     gproc:reg({p, l, {local, Port}}),
     {ok, #state{socket = ListenSocket,
                 local_address = Address,
@@ -30,10 +30,10 @@ init(ListenSocket) ->
                }}.
 
 handle_cast(accept, State = #state{socket=ListenSocket}) ->
-    logger:debug("Waiting for client to accept..."),
+    ?DBG("Waiting for client to accept..."),
     {ok, AcceptSocket} = gen_tcp:accept(ListenSocket),
     {ok, {Address, Port}} = inet:peername(AcceptSocket),
-    logger:debug("Client ~p:~p accepted...", [Address, Port]),
+    ?DBG("Client ~p:~p accepted...", [Address, Port]),
     gproc:reg({n, l, {remote, Address, Port}}),
     {noreply, State#state{socket=AcceptSocket}};
 handle_cast(_, State) ->
@@ -50,11 +50,11 @@ handle_info({tcp, Socket, Data}, #state{socket = Socket} = State) ->
 handle_info({tcp_closed, _Socket}, State) -> {stop, normal, State};
 handle_info({tcp_error, _Socket, _}, State) -> {stop, normal, State};
 handle_info(E, State) ->
-    logger:error("unexpected: ~p", [E]),
+    ?ERR("unexpected: ~p", [E]),
     {noreply, State}.
 
 terminate(_Reason, _Tab) ->
-    logger:debug("fakeredis_intance terminated"),
+    ?DBG("fakeredis_intance terminated"),
     ok.
 code_change(_OldVersion, Tab, _Extra) -> {ok, Tab}.
 
@@ -76,7 +76,7 @@ parse_data(Data, #state{parser_state = ParserState} = State) ->
 
         %% Error
         {error, unknown_response} ->
-            logger:error("Unknown data: ~p", [Data]),
+            ?ERR("Unknown data: ~p", [Data]),
             {noreply, State}
     end.
 
@@ -85,23 +85,23 @@ handle_data(State, [Cmd | Data]) ->
     handle_request(State, lists:flatten([string:uppercase(Cmd), Data])).
 
 handle_request(State, [<<"CLUSTER">> | [Type | _Rest]]) ->
-    logger:debug("Requesting CLUSTER"),
+    ?DBG("Requesting CLUSTER"),
     case string:uppercase(Type) of
         <<"SLOTS">> ->
             {ok, Msg} = gen_server:call(fakeredis_cluster, cluster_slots),
             send(State#state.socket, Msg);
         _ ->
-            logger:error("Not handled cmd: CLUSTER ~p~n", [Type])
+            ?ERR("Not handled cmd: CLUSTER ~p~n", [Type])
     end;
 
 handle_request(State, [<<"SET">>, Key, Value | _Tail]) ->
-    logger:debug("SET request for key: ~p and value: ~p", [Key, Value]),
+    ?DBG("SET request for key: ~p and value: ~p", [Key, Value]),
     ets:insert(?STORAGE, {Key, Value}),
     Msg = fakeredis_encoder:encode(ok),
     send(State#state.socket, Msg);
 
 handle_request(State, [<<"GET">>, Key | _Tail]) ->
-    logger:debug("GET request for key: ~p", [Key]),
+    ?DBG("GET request for key: ~p", [Key]),
     Value = case ets:lookup(?STORAGE, Key) of
                 [{Key, Val}] ->
                     Val;
@@ -112,7 +112,7 @@ handle_request(State, [<<"GET">>, Key | _Tail]) ->
     send(State#state.socket, Msg).
 
 send(Socket, Str) ->
-    logger:debug("SEND: ~p", [Str]),
+    ?DBG("SEND: ~p", [Str]),
     ok = gen_tcp:send(Socket, Str),
     ok = inet:setopts(Socket, [{active, once}]),
     ok.
