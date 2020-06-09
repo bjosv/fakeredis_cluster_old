@@ -27,8 +27,7 @@ jobs:
         path: elvis
     - name: Build elvis
       run: rebar3 escriptize
-      with:
-        path: elvis
+        working-directory: elvis
     - name: Run elvis
       run: |
         elvis/_build/default/bin/elvis rock
