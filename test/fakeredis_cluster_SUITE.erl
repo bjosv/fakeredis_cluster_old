@@ -38,6 +38,6 @@ t_cluster_slots(Config) when is_list(Config) ->
     fakeredis_cluster:start_link([30001, 30002, 30003, 30004, 30005, 30006]),
     {ok, Sock} = gen_tcp:connect("localhost", 30001,
                                  [binary, {active , false}, {packet, 0}]),
-    ok = gen_tcp:send(Sock, ["*2", ?NL, "$7", ?NL, "CLUSTER", ?NL, "$5", ?NL, "SLOTS", ?NL]),
+    ok = gen_tcp:send(Sock, ["*2", ?NL, "$7", ?NL, "cluster", ?NL, "$5", ?NL, "slots", ?NL]),
     {ok, _Data} = gen_tcp:recv(Sock, 0),
     ok = gen_tcp:close(Sock).

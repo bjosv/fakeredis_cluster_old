@@ -62,12 +62,12 @@ parse_data(Data, #state{parser_state = ParserState} = State) ->
     case eredis_parser:parse(ParserState, Data) of
         %% Got complete request
         {ok, Value, NewParserState} ->
-            handle_request(State, Value),
+            handle_data(State, Value),
             State#state{parser_state = NewParserState};
 
         %% Got complete request, with extra data
         {ok, Value, Rest, NewParserState} ->
-            handle_request(State, Value),
+            handle_data(State, Value),
             parse_data(Rest, #state{parser_state = NewParserState});
 
         %% Parser needs more data
@@ -80,16 +80,27 @@ parse_data(Data, #state{parser_state = ParserState} = State) ->
             {noreply, State}
     end.
 
-handle_request(#state{socket = Socket}, [<<"CLUSTER">>, <<"SLOTS">>]) ->
-    logger:debug("Requesting CLUSTER SLOTS"),
-    {ok, Msg} = gen_server:call(fakeredis_cluster, cluster_slots),
-    send(Socket, Msg);
-handle_request(#state{socket = Socket}, [<<"SET">>, Key, Value | _Tail]) ->
+%% Make sure first command is in upper
+handle_data(State, [Cmd | Data]) ->
+    handle_request(State, lists:flatten([string:uppercase(Cmd), Data])).
+
+handle_request(State, [<<"CLUSTER">> | [Type | _Rest]]) ->
+    logger:debug("Requesting CLUSTER"),
+    case string:uppercase(Type) of
+        <<"SLOTS">> ->
+            {ok, Msg} = gen_server:call(fakeredis_cluster, cluster_slots),
+            send(State#state.socket, Msg);
+        _ ->
+            logger:error("Not handled cmd: CLUSTER ~p~n", [Type])
+    end;
+
+handle_request(State, [<<"SET">>, Key, Value | _Tail]) ->
     logger:debug("SET request for key: ~p and value: ~p", [Key, Value]),
     ets:insert(?STORAGE, {Key, Value}),
     Msg = fakeredis_encoder:encode(ok),
-    send(Socket, Msg);
-handle_request(#state{socket = Socket}, [<<"GET">>, Key | _Tail]) ->
+    send(State#state.socket, Msg);
+
+handle_request(State, [<<"GET">>, Key | _Tail]) ->
     logger:debug("GET request for key: ~p", [Key]),
     Value = case ets:lookup(?STORAGE, Key) of
                 [{Key, Val}] ->
@@ -98,7 +109,7 @@ handle_request(#state{socket = Socket}, [<<"GET">>, Key | _Tail]) ->
                     null_bulkstring
             end,
     Msg = fakeredis_encoder:encode(Value),
-    send(Socket, Msg).
+    send(State#state.socket, Msg).
 
 send(Socket, Str) ->
     logger:debug("SEND: ~p", [Str]),
