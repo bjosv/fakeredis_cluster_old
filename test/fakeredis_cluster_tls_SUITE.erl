@@ -40,7 +40,8 @@ t_cluster_slots(Config) when is_list(Config) ->
     Options = [{tls, [{cacertfile, filename:join([Dir, "ca.crt"])},
                       {certfile,   filename:join([Dir, "redis.crt"])},
                       {keyfile,    filename:join([Dir, "redis.key"])},
-                      {verify,     verify_peer}]}],
+                      {fail_if_no_peer_cert, true},
+                      {verify,               verify_peer}]}],
     fakeredis_cluster:start_link([30001, 30002, 30003, 30004, 30005, 30006], Options),
 
     %% Connect a single client

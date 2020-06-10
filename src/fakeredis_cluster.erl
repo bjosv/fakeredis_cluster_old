@@ -34,14 +34,20 @@ init([Ports, Options, MaxClients]) ->
 handle_cast(_, State) ->
     {noreply, State}.
 
-handle_call(cluster_slots, _From, State) ->
+handle_call(cluster_slots, _From, #state{ports = Ports} = State) ->
     ?LOG("Handling a CLUSTER SLOTS request"),
-    M = [[    0,  5460, [<<"127.0.0.1">>, 30004, <<"d761377cea3f01b5e6ff6e51fa02d96f5cacf674">>],
-                        [<<"127.0.0.1">>, 30001, <<"f6198a1311df6e5b64ddd0e80e465dfab43f0b21">>]],
-         [ 5461, 10922, [<<"127.0.0.1">>, 30005, <<"5aad0b87b6e8e4e0d5849da7d0d7d5b58554b9ab">>],
-                        [<<"127.0.0.1">>, 30002, <<"8ad9430f62e6a707c95ff7cc309d68a7a8f1cafa">>]],
-         [10923, 16383, [<<"127.0.0.1">>, 30006, <<"66d36985f1d25af2a0493e3161d312cecc174397">>],
-                        [<<"127.0.0.1">>, 30003, <<"83b210fd405fcd09098033b58524c91d9bbd51a8">>]]],
+    M = [[    0,  5460, [<<"127.0.0.1">>, lists:nth(1, Ports),
+                         <<"d761377cea3f01b5e6ff6e51fa02d96f5cacf674">>],
+                        [<<"127.0.0.1">>, lists:nth(2, Ports),
+                         <<"f6198a1311df6e5b64ddd0e80e465dfab43f0b21">>]],
+         [ 5461, 10922, [<<"127.0.0.1">>, lists:nth(3, Ports),
+                         <<"5aad0b87b6e8e4e0d5849da7d0d7d5b58554b9ab">>],
+                        [<<"127.0.0.1">>, lists:nth(4, Ports),
+                         <<"8ad9430f62e6a707c95ff7cc309d68a7a8f1cafa">>]],
+         [10923, 16383, [<<"127.0.0.1">>, lists:nth(5, Ports),
+                         <<"66d36985f1d25af2a0493e3161d312cecc174397">>],
+                        [<<"127.0.0.1">>, lists:nth(6, Ports),
+                         <<"83b210fd405fcd09098033b58524c91d9bbd51a8">>]]],
     Msg = fakeredis_encoder:encode(M),
     {reply, {ok, Msg}, State};
 handle_call(_E, _From, State) ->

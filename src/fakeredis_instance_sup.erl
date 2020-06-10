@@ -17,11 +17,6 @@
                       {keepalive, false},
                       {send_timeout, ?SEND_TIMEOUT}]).
 
--define(TLS_OPTIONS, [{fail_if_no_peer_cert, true},
-                      {verify, verify_peer},
-                      {server_name_indication, "CHANGE ME"}]).
-
-
 -define(SERVER(Port), {via, gproc, {n, l, {?MODULE, Port}}}).
 
 start_link(Port, Options, MaxClients) ->
