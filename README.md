@@ -2,17 +2,39 @@
 
 ## Build
 
-```
-rebar3 compile
+```shell
+make
 ```
 
 ## Test
 
-```
-rebar3 eunit
+```shell
+make test
 ```
 
-## Tryouts
+## Examples
+
+Start a redis cluster on localhost using port 4000-4005
+
+```erlang
+rebar3 shell --apps fakeredis_cluster
+
+fakeredis_cluster:start_link([4000, 4001, 4002, 4003, 4004, 4005]).
+```
+
+Start a redis cluster using TLS on localhost using port 4000-4005
+
+```erlang
+rebar3 shell --apps fakeredis_cluster
+
+Options = [{cacertfile, "ca.crt"},
+           {certfile,   "redis.crt"},
+           {keyfile,    "redis.key"}].
+
+fakeredis_cluster:start_link([4000, 4001, 4002, 4003, 4004, 4005], Options).
+```
+
+## Other
 
 ```
 rebar3 shell --apps fakeredis_cluster

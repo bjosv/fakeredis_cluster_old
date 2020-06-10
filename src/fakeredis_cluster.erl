@@ -9,22 +9,26 @@
 -export([init/1, handle_cast/2, handle_info/2, handle_call/3, terminate/2, code_change/3]).
 
 
--record(state, { ports
+-record(state, { ports = [],
+                 options = []
                }).
 
 -define(DEFAULT_MAX_CLIENTS, 10).
 
 start_link(Ports) ->
-    start_link(Ports, ?DEFAULT_MAX_CLIENTS).
+    start_link(Ports, [], ?DEFAULT_MAX_CLIENTS).
 
-start_link(Ports, MaxClients) ->
-    gen_server:start_link({local, ?MODULE}, ?MODULE, [Ports, MaxClients], []).
+start_link(Ports, Options) ->
+    start_link(Ports, Options, ?DEFAULT_MAX_CLIENTS).
 
-init([Ports, MaxClients]) ->
-    ?LOG("Handling a CLUSTER SLOTS request: ~p", [Ports]),
+start_link(Ports, Options, MaxClients) ->
+    gen_server:start_link({local, ?MODULE}, ?MODULE, [Ports, Options, MaxClients], []).
+
+init([Ports, Options, MaxClients]) ->
     ets:new(?STORAGE, [public, set, named_table, {read_concurrency, true}]),
-    [fakeredis_instance_sup:start_link(Port, MaxClients) || Port <- Ports],
-    {ok, #state{ports = Ports}}.
+    [fakeredis_instance_sup:start_link(Port, Options, MaxClients) || Port <- Ports],
+    {ok, #state{ports = Ports,
+                options = Options}}.
 
 
 handle_cast(_, State) ->

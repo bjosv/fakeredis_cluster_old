@@ -3,12 +3,13 @@
 
 -include("fakeredis_common.hrl").
 
--export([start_link/1]).
+-export([start_link/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_cast/2, handle_info/2, handle_call/3, terminate/2, code_change/3]).
 
 -record(state, { socket,
+                 transport,
                  local_address,
                  local_port,
                  remote_address,
@@ -16,21 +17,35 @@
                  parser_state
                }).
 
-start_link(ListenSocket) ->
-    proc_lib:start_link(?MODULE, init, [ListenSocket]).
+start_link(ListenSocket, Options) ->
+    proc_lib:start_link(?MODULE, init, [[ListenSocket, Options]]).
 
-init(ListenSocket) ->
+init([ListenSocket, Options]) ->
     {ok, {LocalAddress, LocalPort}} = inet:sockname(ListenSocket),
     gproc:reg({p, l, {local, LocalPort}}),
     ok = proc_lib:init_ack({ok, self()}), %% Avoid block in accept/1
     ?DBG("Listening on ~p:~p", [LocalAddress, LocalPort]),
 
     ?DBG("Waiting for client to accept..."),
-    {ok, AcceptSocket} = gen_tcp:accept(ListenSocket),
-    {ok, {RemoteAddress, RemotePort}} = inet:peername(AcceptSocket),
+    {ok, Socket} = gen_tcp:accept(ListenSocket),
+    {ok, {RemoteAddress, RemotePort}} = inet:peername(Socket),
     gproc:reg({n, l, {remote, RemoteAddress, RemotePort}}),
-    ?DBG("Client ~p:~p accepted...", [RemoteAddress, RemotePort]),
-    gen_server:enter_loop(?MODULE, [], #state{socket = AcceptSocket,
+
+    %% TLS handshake if option given
+    {Transport, ActiveSocket} = case proplists:get_value(tls, Options, []) of
+                                    [] -> {tcp, Socket};
+                                    TlsOptions ->
+                                        inet:setopts(Socket, [{active, false}]),
+                                        case ssl:handshake(Socket, TlsOptions) of
+                                            {ok, TlsSocket} -> {tls, TlsSocket};
+                                            {error, _} -> {tcp, Socket}
+                                        end
+                                end,
+    setopts(ActiveSocket, Transport, [{active, once}]),
+    ?DBG("Client ~p:~p using ~p accepted...", [RemoteAddress, RemotePort, Transport]),
+
+    gen_server:enter_loop(?MODULE, [], #state{socket = ActiveSocket,
+                                              transport = Transport,
                                               local_address = LocalAddress,
                                               local_port = LocalPort,
                                               remote_address = RemoteAddress,
@@ -45,19 +60,23 @@ handle_call(exit, _From, State) ->
     {stop, "Exit called", State};
 handle_call(_E, _From, State) -> {noreply, State}.
 
-%% Connection calls
-handle_info({tcp, Socket, Data}, #state{socket = Socket} = State) ->
-    ok = inet:setopts(Socket, [{active, once}]),
+%% TCP/TLS events
+handle_info({_, Socket, Data}, #state{socket = Socket,
+                                      transport = Transport} = State) ->
+    ok = setopts(Socket, Transport, [{active, once}]),
     {noreply, parse_data(Data, State)};
 handle_info({tcp_closed, _Socket}, State) -> {stop, normal, State};
-handle_info({tcp_error, _Socket, _}, State) -> {stop, normal, State};
+handle_info({ssl_closed, _Socket}, State) -> {stop, normal, State};
+handle_info({tcp_error, _Socket, _Reason}, State) -> {stop, normal, State};
+handle_info({ssl_error, _Socket, _Reason}, State) -> {stop, normal, State};
 handle_info(E, State) ->
-    ?ERR("unexpected: ~p", [E]),
+    ?ERR("unexpected: ~p (State: ~p)", [E, State]),
     {noreply, State}.
 
 terminate(_Reason, _Tab) ->
     ?DBG("fakeredis_intance terminated"),
     ok.
+
 code_change(_OldVersion, Tab, _Extra) -> {ok, Tab}.
 
 parse_data(Data, #state{parser_state = ParserState} = State) ->
@@ -91,7 +110,7 @@ handle_request(State, [<<"CLUSTER">> | [Type | _Rest]]) ->
     case string:uppercase(Type) of
         <<"SLOTS">> ->
             {ok, Msg} = gen_server:call(fakeredis_cluster, cluster_slots),
-            send(State#state.socket, Msg);
+            send(State, Msg);
         _ ->
             ?ERR("Not handled cmd: CLUSTER ~p~n", [Type])
     end;
@@ -100,7 +119,7 @@ handle_request(State, [<<"SET">>, Key, Value | _Tail]) ->
     ?DBG("SET request for key: ~p and value: ~p", [Key, Value]),
     ets:insert(?STORAGE, {Key, Value}),
     Msg = fakeredis_encoder:encode(ok),
-    send(State#state.socket, Msg);
+    send(State, Msg);
 
 handle_request(State, [<<"GET">>, Key | _Tail]) ->
     ?DBG("GET request for key: ~p", [Key]),
@@ -111,14 +130,17 @@ handle_request(State, [<<"GET">>, Key | _Tail]) ->
                     null_bulkstring
             end,
     Msg = fakeredis_encoder:encode(Value),
-    send(State#state.socket, Msg).
+    send(State, Msg).
 
-send(Socket, Str) ->
+setopts(Socket, tcp, Opts) -> inet:setopts(Socket, Opts);
+setopts(Socket, tls, Opts) ->  ssl:setopts(Socket, Opts).
+
+send(State, Str) when State#state.transport == tls ->
     ?DBG("SEND: ~p", [Str]),
-    ok = gen_tcp:send(Socket, Str),
-    ok = inet:setopts(Socket, [{active, once}]),
-    ok.
+    ok = ssl:send(State#state.socket, Str),
+    ssl:setopts(State#state.socket, [{active, once}]);
 
-
-
-
+send(State, Str) ->
+    ?DBG("SEND: ~p", [Str]),
+    ok = gen_tcp:send(State#state.socket, Str),
+    inet:setopts(State#state.socket, [{active, once}]).

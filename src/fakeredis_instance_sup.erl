@@ -4,7 +4,7 @@
 -include("fakeredis_common.hrl").
 
 %% API
--export([start_link/1, start_link/2]).
+-export([start_link/3]).
 
 %% Supervisor callback
 -export([init/1]).
@@ -24,14 +24,11 @@
 
 -define(SERVER(Port), {via, gproc, {n, l, {?MODULE, Port}}}).
 
-start_link(Port) ->
-    start_link(Port, 4).
+start_link(Port, Options, MaxClients) ->
+    supervisor:start_link(?SERVER(Port), ?MODULE, [Port, Options, MaxClients]).
 
-start_link(Port, MaxClients) ->
-    supervisor:start_link(?SERVER(Port), ?MODULE, [Port, MaxClients]).
-
-init([Port, MaxClients]) ->
-    ?LOG("Start listening on port=~p [MaxClients=~p]", [Port, MaxClients]),
+init([Port, Options, MaxClients]) ->
+    ?LOG("Start listening on port=~p [Options=~p MaxClients=~p]", [Port, Options, MaxClients]),
     {ok, ListenSocket} = gen_tcp:listen(Port, ?TCP_OPTIONS),
 
     spawn_link(fun() -> start_listeners(Port, MaxClients) end),
@@ -40,7 +37,7 @@ init([Port, MaxClients]) ->
                  intensity => 0,
                  period => 1},
     ChildSpecs = [{fakeredis_instance,
-                   {fakeredis_instance, start_link, [ListenSocket]},
+                   {fakeredis_instance, start_link, [ListenSocket, Options]},
                    temporary, infinity, worker, [fakeredis_instance]}],
     {ok, {SupFlags, ChildSpecs}}.
 
