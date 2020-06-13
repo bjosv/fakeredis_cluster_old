@@ -24,7 +24,7 @@ start_link(Port, Options, MaxClients) ->
 
 init([Port, Options, MaxClients]) ->
     ?LOG("Start listening on port=~p [Options=~p MaxClients=~p]", [Port, Options, MaxClients]),
-    {ok, ListenSocket} = gen_tcp:listen(Port, ?TCP_OPTIONS),
+    ListenSocket = start_listen_socket(Port, ?TCP_OPTIONS),
 
     spawn_link(fun() -> start_listeners(Port, MaxClients) end),
 
@@ -37,6 +37,11 @@ init([Port, Options, MaxClients]) ->
     {ok, {SupFlags, ChildSpecs}}.
 
 %% internal functions
+start_listen_socket(Port, Options) ->
+    case gen_tcp:listen(Port, Options) of
+        {ok, ListenSocket} -> ListenSocket;
+        {error, Reason} -> exit({listen_err, Reason})
+    end.
 
 start_listener(Port) ->
     supervisor:start_child(?SERVER(Port), []).
