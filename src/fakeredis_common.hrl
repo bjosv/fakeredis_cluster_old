@@ -1,10 +1,12 @@
 %% ets table to use
 -define(STORAGE, fakeredis_cluster_storage).
 
+-include_lib("hut/include/hut.hrl").
+
 -ifdef(TEST).
 %% Seems to give too long lines:
 %% -define(LOG(X),    io:format(user, "[~p:L~p] " ++ X ++ "~n", [?MODULE, ?LINE])).
-%% -define(LOG(X, V), io:format(user, "[~p:L~p] " ++ X ++ "~n", [?MODULE, ?LINE]++V)).
+
 -define(DBG(X),    io:format(user, X ++ "~n", [])).
 -define(DBG(X, V), io:format(user, X ++ "~n", V)).
 -define(LOG(X),    io:format(user, X ++ "~n", [])).
@@ -14,10 +16,10 @@
 
 -else.
 
--define(DBG(X),    logger:debug("[~p:L~p] " ++ X ++ "~n", [?MODULE, ?LINE])).
--define(DBG(X, V), logger:debug("[~p:L~p] " ++ X ++ "~n", [?MODULE, ?LINE]++V)).
--define(LOG(X),    logger:notice("[~p:L~p] " ++ X ++ "~n", [?MODULE, ?LINE])).
--define(LOG(X, V), logger:notice("[~p:L~p] " ++ X ++ "~n", [?MODULE, ?LINE]++V)).
--define(ERR(X),    logger:error(X ++ "~n", [])).
--define(ERR(X, V), logger:error(X ++ "~n", V)).
+-define(DBG(X),    ?log(debug, "[~p:L~p] " ++ X ++ "~n", [?MODULE, ?LINE])).
+-define(DBG(X, V), ?log(debug, "[~p:L~p] " ++ X ++ "~n", [?MODULE, ?LINE]++V)).
+-define(LOG(X),    ?log(notice, "[~p:L~p] " ++ X ++ "~n", [?MODULE, ?LINE])).
+-define(LOG(X, V), ?log(notice, "[~p:L~p] " ++ X ++ "~n", [?MODULE, ?LINE]++V)).
+-define(ERR(X),    ?log(error, X ++ "~n", [])).
+-define(ERR(X, V), ?log(error, X ++ "~n", V)).
 -endif.
