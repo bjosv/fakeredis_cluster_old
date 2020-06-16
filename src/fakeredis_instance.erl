@@ -73,8 +73,8 @@ handle_info(E, State) ->
     ?ERR("unexpected: ~p (State: ~p)", [E, State]),
     {noreply, State}.
 
-terminate(_Reason, _Tab) ->
-    ?DBG("fakeredis_intance terminated"),
+terminate(Reason, _Tab) ->
+    ?DBG("fakeredis_intance:terminate(Reason=~p)", [Reason]),
     ok.
 
 code_change(_OldVersion, Tab, _Extra) -> {ok, Tab}.
