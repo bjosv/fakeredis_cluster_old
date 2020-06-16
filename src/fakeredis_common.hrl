@@ -7,12 +7,12 @@
 %% Seems to give too long lines:
 %% -define(LOG(X),    io:format(user, "[~p:L~p] " ++ X ++ "~n", [?MODULE, ?LINE])).
 
--define(DBG(X),    io:format(user, X ++ "~n", [])).
--define(DBG(X, V), io:format(user, X ++ "~n", V)).
--define(LOG(X),    io:format(user, X ++ "~n", [])).
--define(LOG(X, V), io:format(user, X ++ "~n", V)).
--define(ERR(X),    io:format(user, "Error:" ++ X ++ "~n", [])).
--define(ERR(X, V), io:format(user, "Error:" ++ X ++ "~n", V)).
+-define(DBG(X),    io:format(user, "\033[33mDBG: " ++ X ++ "\033[0m~n", [])).
+-define(DBG(X, V), io:format(user, "\033[33mDBG: " ++ X ++ "\033[0m~n", V)).
+-define(LOG(X),    io:format(user, "LOG: " ++ X ++ "\033[0m~n", [])).
+-define(LOG(X, V), io:format(user, "LOG: " ++ X ++ "\033[0m~n", V)).
+-define(ERR(X),    io:format(user, "\033[31mERR: " ++ X ++ "\033[0m~n", [])).
+-define(ERR(X, V), io:format(user, "\033[31mERR: " ++ X ++ "\033[0m~n", V)).
 
 -else.
 

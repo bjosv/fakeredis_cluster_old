@@ -35,9 +35,25 @@ suite() -> [{timetrap, {minutes, 5}}].
 %% Test
 
 t_cluster_slots(Config) when is_list(Config) ->
+    Data = ["*2", ?NL, "$7", ?NL, "cluster", ?NL, "$5", ?NL, "slots", ?NL],
+
+    %% Setup cluster and request CLUSTER SLOTS
     fakeredis_cluster:start_link([30001, 30002, 30003, 30004, 30005, 30006]),
     {ok, Sock} = gen_tcp:connect("localhost", 30001,
                                  [binary, {active , false}, {packet, 0}]),
-    ok = gen_tcp:send(Sock, ["*2", ?NL, "$7", ?NL, "cluster", ?NL, "$5", ?NL, "slots", ?NL]),
+    ok = gen_tcp:send(Sock, Data),
     {ok, _Data} = gen_tcp:recv(Sock, 0),
-    ok = gen_tcp:close(Sock).
+
+    %% Kill FakeRedis instance
+    fakeredis_cluster:kill_instance(30001),
+    ?assertMatch(ok, gen_tcp:send(Sock, Data)),
+    ?assertMatch({error, closed}, gen_tcp:recv(Sock, 0)),
+
+    %% Restart instance
+    fakeredis_cluster:start_instance(30001),
+    fakeredis_cluster:start_instance(30001),
+    {ok, Sock2} = gen_tcp:connect("localhost", 30001,
+                                 [binary, {active , false}, {packet, 0}]),
+    ok = gen_tcp:send(Sock2, Data),
+    {ok, _Data} = gen_tcp:recv(Sock2, 0),
+    ok = gen_tcp:close(Sock2).

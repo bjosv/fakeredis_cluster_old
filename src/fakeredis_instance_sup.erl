@@ -5,6 +5,7 @@
 
 %% API
 -export([start_link/3]).
+-export([start_listeners/2]).
 
 %% Supervisor callback
 -export([init/1]).
@@ -47,5 +48,11 @@ start_listener(Port) ->
     supervisor:start_child(?SERVER(Port), []).
 
 start_listeners(Port, N) ->
-  [start_listener(Port) || _ <- lists:seq(1, N)],
-  ok.
+    case proplists:get_value(active, supervisor:count_children(?SERVER(Port))) of
+        A when N>A ->
+            ?DBG("Starting ~p listeners (N:~p, Active:~p)", [N-A, N, A]),
+            [start_listener(Port) || _ <- lists:seq(1, N-A)];
+        A ->
+            ?ERR("Max amount of listeners already started (N:~p, Active:~p)", [N, A])
+    end,
+    ok.
