@@ -15,6 +15,7 @@
 -record(state, { ports = []
                , max_clients = 0
                , options = []
+               , slots_maps = []
                }).
 
 -define(DEFAULT_MAX_CLIENTS, 10).
@@ -43,25 +44,15 @@ init([Ports, Options, MaxClients]) ->
     [fakeredis_instance_sup:start_link(Port, Options, MaxClients) || Port <- Ports],
     {ok, #state{ports = Ports,
                 max_clients = MaxClients,
-                options = Options}}.
+                options = Options,
+                slots_maps = create_slots_maps(Ports)}}.
 
 handle_cast(_, State) ->
     {noreply, State}.
 
-handle_call(cluster_slots, _From, #state{ports = Ports} = State) ->
+handle_call(cluster_slots, _From, #state{slots_maps = SlotsMaps} = State) ->
     ?LOG("Handling a CLUSTER SLOTS request"),
-    M = [[    0,  5460, [<<"127.0.0.1">>, lists:nth(1, Ports),
-                         <<"d761377cea3f01b5e6ff6e51fa02d96f5cacf674">>],
-                        [<<"127.0.0.1">>, lists:nth(2, Ports),
-                         <<"f6198a1311df6e5b64ddd0e80e465dfab43f0b21">>]],
-         [ 5461, 10922, [<<"127.0.0.1">>, lists:nth(3, Ports),
-                         <<"5aad0b87b6e8e4e0d5849da7d0d7d5b58554b9ab">>],
-                        [<<"127.0.0.1">>, lists:nth(4, Ports),
-                         <<"8ad9430f62e6a707c95ff7cc309d68a7a8f1cafa">>]],
-         [10923, 16383, [<<"127.0.0.1">>, lists:nth(5, Ports),
-                         <<"66d36985f1d25af2a0493e3161d312cecc174397">>],
-                        [<<"127.0.0.1">>, lists:nth(6, Ports),
-                         <<"83b210fd405fcd09098033b58524c91d9bbd51a8">>]]],
+    M = create_cluster_slots_resp(SlotsMaps),
     Msg = fakeredis_encoder:encode(M),
     {reply, {ok, Msg}, State};
 handle_call({start_instance, Port}, _From, #state{max_clients = MaxClients} = State) ->
@@ -82,3 +73,35 @@ handle_info(_E, State) -> {noreply, State}.
 terminate(_Reason, _Tab) -> ok.
 
 code_change(_OldVersion, Tab, _Extra) -> {ok, Tab}.
+
+%% Internal
+
+create_slots_maps(Ports) ->
+    Ports2 = lists:flatten(to_2tuple(Ports)),
+    [#slots_map{master = #node{id = generate_id(),
+                               address = <<"127.0.0.1">>,
+                               port = MasterPort},
+                slave = #node{id = generate_id(),
+                               address = <<"127.0.0.1">>,
+                               port = SlavePort}
+               } || {MasterPort, SlavePort} <- Ports2].
+
+to_2tuple([M, S | Rest]) ->
+    [{M, S}, to_2tuple(Rest)];
+to_2tuple([]) ->
+    [].
+
+generate_id() ->
+    Bits160 = crypto:hash(sha, integer_to_list(rand:uniform(20))),
+    list_to_binary([io_lib:format("~2.16.0b", [X]) ||
+                      X <- binary_to_list(Bits160)]).
+
+create_cluster_slots_resp(SlotsMaps) ->
+    [[SlotsMap#slots_map.start_slot,
+      SlotsMap#slots_map.end_slot,
+      [SlotsMap#slots_map.master#node.address,
+       SlotsMap#slots_map.master#node.port,
+       SlotsMap#slots_map.master#node.id],
+      [SlotsMap#slots_map.slave#node.address,
+       SlotsMap#slots_map.slave#node.port,
+       SlotsMap#slots_map.slave#node.id]] || SlotsMap <- SlotsMaps].

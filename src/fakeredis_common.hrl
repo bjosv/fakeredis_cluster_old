@@ -1,6 +1,8 @@
 %% ets table to use
 -define(STORAGE, fakeredis_cluster_storage).
 
+-define(HASH_SLOTS, 16384).
+
 -include_lib("hut/include/hut.hrl").
 
 -ifdef(TEST).
@@ -23,3 +25,14 @@
 -define(ERR(X),    ?log(error, X ++ "~n", [])).
 -define(ERR(X, V), ?log(error, X ++ "~n", V)).
 -endif.
+
+-record(node, { id      :: binary()
+              , address :: binary()
+              , port    :: integer()
+              }).
+
+-record(slots_map, { start_slot = 0 :: integer()
+                   , end_slot   = 0 :: integer()
+                   , master         :: #node{}
+                   , slave          :: #node{}
+                   }).
