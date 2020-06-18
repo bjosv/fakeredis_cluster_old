@@ -102,7 +102,7 @@ update_slots([H | []], First, _SlotsPerNode, _Cursor) ->
 update_slots([H | T], First, SlotsPerNode, Cursor) ->
     Last = round(Cursor + SlotsPerNode - 1),
     [H#slots_map{start_slot = First, end_slot = Last}]
-        ++ update_slots(T, Last+1, SlotsPerNode, Cursor+SlotsPerNode).
+        ++ update_slots(T, Last + 1, SlotsPerNode, Cursor + SlotsPerNode).
 
 generate_id() ->
     Bits160 = crypto:hash(sha, integer_to_list(rand:uniform(20))),
