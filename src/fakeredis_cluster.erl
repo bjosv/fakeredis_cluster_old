@@ -78,18 +78,31 @@ code_change(_OldVersion, Tab, _Extra) -> {ok, Tab}.
 
 create_slots_maps(Ports) ->
     Ports2 = lists:flatten(to_2tuple(Ports)),
-    [#slots_map{master = #node{id = generate_id(),
-                               address = <<"127.0.0.1">>,
-                               port = MasterPort},
-                slave = #node{id = generate_id(),
-                               address = <<"127.0.0.1">>,
-                               port = SlavePort}
-               } || {MasterPort, SlavePort} <- Ports2].
+    SlotsMaps = [#slots_map{master = #node{id = generate_id(),
+                                           address = <<"127.0.0.1">>,
+                                           port = MasterPort},
+                            slave = #node{id = generate_id(),
+                                          address = <<"127.0.0.1">>,
+                                          port = SlavePort}
+                           } || {MasterPort, SlavePort} <- Ports2],
+    distribute_slots(SlotsMaps).
 
 to_2tuple([M, S | Rest]) ->
     [{M, S}, to_2tuple(Rest)];
 to_2tuple([]) ->
     [].
+
+distribute_slots(SlotsMaps) ->
+    SlotsPerNode = ?HASH_SLOTS / length(SlotsMaps), %% Calc as redis-cli does, in floats
+    update_slots(SlotsMaps, 0, SlotsPerNode, 0.0).
+
+update_slots([H | []], First, _SlotsPerNode, _Cursor) ->
+    %% Last master takes remaining slots
+    [H#slots_map{start_slot = First, end_slot = ?HASH_SLOTS-1}];
+update_slots([H | T], First, SlotsPerNode, Cursor) ->
+    Last = round(Cursor + SlotsPerNode - 1),
+    [H#slots_map{start_slot = First, end_slot = Last}]
+        ++ update_slots(T, Last+1, SlotsPerNode, Cursor+SlotsPerNode).
 
 generate_id() ->
     Bits160 = crypto:hash(sha, integer_to_list(rand:uniform(20))),
