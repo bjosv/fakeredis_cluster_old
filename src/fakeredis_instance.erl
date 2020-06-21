@@ -50,7 +50,7 @@ init([ListenSocket, Options]) ->
                                               local_port = LocalPort,
                                               remote_address = RemoteAddress,
                                               remote_port = RemotePort,
-                                              parser_state = eredis_parser:init()
+                                              parser_state = fakeredis_parser:init()
                                              }).
 
 handle_cast(_, State) ->
@@ -80,7 +80,7 @@ terminate(Reason, _Tab) ->
 code_change(_OldVersion, Tab, _Extra) -> {ok, Tab}.
 
 parse_data(Data, #state{parser_state = ParserState} = State) ->
-    case eredis_parser:parse(ParserState, Data) of
+    case fakeredis_parser:parse(ParserState, Data) of
         %% Got complete request
         {ok, Value, NewParserState} ->
             handle_data(State, Value),
