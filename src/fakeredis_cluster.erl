@@ -4,6 +4,7 @@
 -include("fakeredis_common.hrl").
 
 -export([start_link/1, start_link/2, start_link/3]).
+-export([main/1]). %% escript
 
 -export([ start_instance/1
         , kill_instance/1
@@ -12,9 +13,9 @@
 %% gen_server callbacks
 -export([init/1, handle_cast/2, handle_info/2, handle_call/3, terminate/2, code_change/3]).
 
--record(state, { ports = []
-               , max_clients = 0
+-record(state, { max_clients = 0
                , options = []
+               , node_map = #{}
                , slots_maps = []
                }).
 
@@ -37,23 +38,38 @@ start_instance(Port) ->
 kill_instance(Port) ->
     gen_server:call(?MODULE, {kill_instance, Port}).
 
+%% escript Entry point
+main([]) ->
+    DefaultPorts = [{20010, 20011}, {20020, 20021}, {20030, 20031}],
+    main_(DefaultPorts);
+
+main(Args) ->
+    main_(Args).
+
+main_(Ports) ->
+    application:ensure_all_started(?MODULE),
+    fakeredis_cluster:start_link(Ports),
+    timer:sleep(infinity).
+
 %% Internals
 
 init([Ports, Options, MaxClients]) ->
     ets:new(?STORAGE, [public, set, named_table, {read_concurrency, true}]),
-    [fakeredis_instance_sup:start_link(Port, Options, MaxClients) || Port <- Ports],
-    {ok, #state{ports = Ports,
-                max_clients = MaxClients,
+    {NodeMap, SlotsMaps0} = parse_port_args(Ports),
+    SlotsMaps = distribute_slots(SlotsMaps0),
+    [fakeredis_instance_sup:start_link(Node#node.port, Options, MaxClients) ||
+        Node <- maps:values(NodeMap)],
+    {ok, #state{max_clients = MaxClients,
                 options = Options,
-                slots_maps = create_slots_maps(Ports)}}.
+                node_map = NodeMap,
+                slots_maps = SlotsMaps}}.
 
 handle_cast(_, State) ->
     {noreply, State}.
 
-handle_call(cluster_slots, _From, #state{slots_maps = SlotsMaps} = State) ->
+handle_call(cluster_slots, _From, State) ->
     ?LOG("Handling a CLUSTER SLOTS request"),
-    M = create_cluster_slots_resp(SlotsMaps),
-    Msg = fakeredis_encoder:encode(M),
+    Msg = fakeredis_encoder:encode(create_cluster_slots_resp(State)),
     {reply, {ok, Msg}, State};
 handle_call({start_instance, Port}, _From, #state{max_clients = MaxClients} = State) ->
     ?LOG("start_instance: ~p", [Port]),
@@ -76,21 +92,47 @@ code_change(_OldVersion, Tab, _Extra) -> {ok, Tab}.
 
 %% Internal
 
-create_slots_maps(Ports) ->
-    Ports2 = lists:flatten(to_2tuple(Ports)),
-    SlotsMaps = [#slots_map{master = #node{id = generate_id(),
-                                           address = <<"127.0.0.1">>,
-                                           port = MasterPort},
-                            slave = #node{id = generate_id(),
-                                          address = <<"127.0.0.1">>,
-                                          port = SlavePort}
-                           } || {MasterPort, SlavePort} <- Ports2],
-    distribute_slots(SlotsMaps).
+%% [M1, M2, M3]
+%% [{M1, S1}, {M2, S2}]
+%% [{M1, S1, S2}, {M2, S3, S4}]
+%% -> {NodeMap, SlotsMaps}
+parse_port_args(ArgList) when is_list(ArgList) ->
+    Parse = [parse_slots_maps_and_nodes(PortElem) || PortElem <- ArgList],
+    {NodeMapList, SlotsMaps} = lists:unzip(Parse),
+    NodeMap = maps:from_list(lists:flatten(NodeMapList)),
+    {NodeMap, SlotsMaps}.
 
-to_2tuple([M, S | Rest]) ->
-    [{M, S}, to_2tuple(Rest)];
-to_2tuple([]) ->
-    [].
+parse_slots_maps_and_nodes(PortElem) ->
+    Nodes = parse_nodes(PortElem),
+    SlotsMaps = create_slots_maps(Nodes),
+    {Nodes, SlotsMaps}.
+
+%% Parse data, create [{id, node}, ...]
+parse_nodes(PortElem) when is_tuple(PortElem) ->
+    PortList = [element(Pos, PortElem) || Pos <- lists:seq(1, tuple_size(PortElem))],
+    {[MasterPort], Replicas} = lists:split(1, PortList),
+    lists:flatten([create_node(MasterPort),
+     [create_node(Port) || Port <- Replicas]]);
+parse_nodes(PortElem) when is_list(PortElem) ->
+    {[MasterPort], Relicas} = lists:split(1, PortElem),
+    lists:flatten([create_node(MasterPort),
+     [create_node(Port) || Port <- Relicas]]);
+parse_nodes(PortElem) ->
+    create_node(PortElem).
+
+create_node(Port) ->
+    Id = generate_id(),
+    {Id, #node{id = Id,
+               address = <<"127.0.0.1">>,
+               port = Port}}.
+
+%% Create a #slots_map{} from node (master only) or nodes (master + replicas)
+create_slots_maps([{Id, _Node} | Replicas] = Nodes) when is_list(Nodes)->
+    ReplicaIds = [ReplicaNode#node.id || {_ReplicaId, ReplicaNode} <- Replicas],
+    #slots_map{master_id = Id,
+               slave_ids = ReplicaIds};
+create_slots_maps({Id, _Node}) ->
+    #slots_map{master_id = Id}.
 
 distribute_slots(SlotsMaps) ->
     SlotsPerNode = ?HASH_SLOTS / length(SlotsMaps), %% Calc as redis-cli does, in floats
@@ -105,16 +147,25 @@ update_slots([H | T], First, SlotsPerNode, Cursor) ->
         ++ update_slots(T, Last + 1, SlotsPerNode, Cursor + SlotsPerNode).
 
 generate_id() ->
-    Bits160 = crypto:hash(sha, integer_to_list(rand:uniform(20))),
+    Bits160 = crypto:hash(sha, binary_to_list(crypto:strong_rand_bytes(20))),
     list_to_binary([io_lib:format("~2.16.0b", [X]) ||
                       X <- binary_to_list(Bits160)]).
 
-create_cluster_slots_resp(SlotsMaps) ->
+create_cluster_slots_resp(State) ->
     [[SlotsMap#slots_map.start_slot,
       SlotsMap#slots_map.end_slot,
-      [SlotsMap#slots_map.master#node.address,
-       SlotsMap#slots_map.master#node.port,
-       SlotsMap#slots_map.master#node.id],
-      [SlotsMap#slots_map.slave#node.address,
-       SlotsMap#slots_map.slave#node.port,
-       SlotsMap#slots_map.slave#node.id]] || SlotsMap <- SlotsMaps].
+      get_cluster_nodes(SlotsMap,
+                        State#state.node_map,
+                        SlotsMap#slots_map.slave_ids)] || SlotsMap <- State#state.slots_maps].
+
+get_cluster_nodes(SlotsMap, NodeMap, undefined) ->
+    Master = maps:get(SlotsMap#slots_map.master_id, NodeMap),
+    [Master#node.address,
+      Master#node.port,
+      Master#node.id];
+get_cluster_nodes(SlotsMap, NodeMap, SlaveIds) ->
+    Master = maps:get(SlotsMap#slots_map.master_id, NodeMap),
+    Replicas = [maps:get(NodeId, NodeMap) || NodeId <- SlaveIds],
+    [[Node#node.address,
+      Node#node.port,
+      Node#node.id] || Node <- [Master] ++ Replicas].

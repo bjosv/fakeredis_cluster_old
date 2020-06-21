@@ -9,6 +9,9 @@
 
 %% Test cases
 -export([ t_cluster_slots/1
+        , t_start_masters_only/1
+        , t_start_masters_with_single_replica/1
+        , t_start_masters_with_2_replicas/1
         ]).
 
 -include_lib("common_test/include/ct.hrl").
@@ -35,12 +38,12 @@ suite() -> [{timetrap, {minutes, 5}}].
 %% Test
 
 t_cluster_slots(Config) when is_list(Config) ->
-    Data = ["*2", ?NL, "$7", ?NL, "cluster", ?NL, "$5", ?NL, "slots", ?NL],
-
     %% Setup cluster and request CLUSTER SLOTS
     fakeredis_cluster:start_link([30001, 30002, 30003, 30004, 30005, 30006]),
     {ok, Sock} = gen_tcp:connect("localhost", 30001,
                                  [binary, {active , false}, {packet, 0}]),
+
+    Data = ["*2", ?NL, "$7", ?NL, "cluster", ?NL, "$5", ?NL, "slots", ?NL],
     ok = gen_tcp:send(Sock, Data),
     {ok, _Data} = gen_tcp:recv(Sock, 0),
 
@@ -57,3 +60,39 @@ t_cluster_slots(Config) when is_list(Config) ->
     ok = gen_tcp:send(Sock2, Data),
     {ok, _Data} = gen_tcp:recv(Sock2, 0),
     ok = gen_tcp:close(Sock2).
+
+t_start_masters_only(Config) when is_list(Config) ->
+    fakeredis_cluster:start_link([20010, 20020, 20030]),
+    {ok, Sock} = gen_tcp:connect("localhost", 20010,
+                                 [binary, {active , false}, {packet, 0}]),
+
+    Data = ["*2", ?NL, "$7", ?NL, "cluster", ?NL, "$5", ?NL, "slots", ?NL],
+    ok = gen_tcp:send(Sock, Data),
+    {ok, _Data} = gen_tcp:recv(Sock, 0),
+    ok = gen_tcp:close(Sock).
+
+t_start_masters_with_single_replica(Config) when is_list(Config) ->
+    fakeredis_cluster:start_link([{20010, 20011},
+                                  {20020, 20021},
+                                  {20030, 20031}]),
+
+    {ok, Sock} = gen_tcp:connect("localhost", 20010,
+                                 [binary, {active , false}, {packet, 0}]),
+
+    Data = ["*2", ?NL, "$7", ?NL, "cluster", ?NL, "$5", ?NL, "slots", ?NL],
+    ok = gen_tcp:send(Sock, Data),
+    {ok, _Data} = gen_tcp:recv(Sock, 0),
+    ok = gen_tcp:close(Sock).
+
+t_start_masters_with_2_replicas(Config) when is_list(Config) ->
+    fakeredis_cluster:start_link([{20010, 20011, 20012},
+                                  {20020, 20021, 20022},
+                                  {20030, 20031, 20031}]),
+
+    {ok, Sock} = gen_tcp:connect("localhost", 20010,
+                                 [binary, {active , false}, {packet, 0}]),
+
+    Data = ["*2", ?NL, "$7", ?NL, "cluster", ?NL, "$5", ?NL, "slots", ?NL],
+    ok = gen_tcp:send(Sock, Data),
+    {ok, _Data} = gen_tcp:recv(Sock, 0),
+    ok = gen_tcp:close(Sock).

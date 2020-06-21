@@ -6,6 +6,7 @@ all: compile xref dialyzer elvis
 
 compile:
 	@$(REBAR) compile
+	@$(REBAR) escriptize
 
 clean:
 	@$(REBAR) clean

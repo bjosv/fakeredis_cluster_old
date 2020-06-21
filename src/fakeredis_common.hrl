@@ -33,6 +33,6 @@
 
 -record(slots_map, { start_slot = 0 :: integer()
                    , end_slot   = 0 :: integer()
-                   , master         :: #node{}
-                   , slave          :: #node{}
+                   , master_id      :: binary()
+                   , slave_ids      :: [binary()] | undefined
                    }).
