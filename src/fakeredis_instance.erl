@@ -14,6 +14,8 @@
                  local_port,
                  remote_address,
                  remote_port,
+                 delay,                         % Option {delay, Milliseconds},
+                                                % default 0, affects GET and SET
                  parser_state
                }).
 
@@ -44,12 +46,14 @@ init([ListenSocket, Options]) ->
     setopts(ActiveSocket, Transport, [{active, once}]),
     ?DBG("Client ~p:~p using ~p accepted...", [RemoteAddress, RemotePort, Transport]),
 
+    Delay = proplists:get_value(delay, Options, 0),
     gen_server:enter_loop(?MODULE, [], #state{socket = ActiveSocket,
                                               transport = Transport,
                                               local_address = LocalAddress,
                                               local_port = LocalPort,
                                               remote_address = RemoteAddress,
                                               remote_port = RemotePort,
+                                              delay = Delay,
                                               parser_state = fakeredis_parser:init()
                                              }).
 
@@ -117,12 +121,14 @@ handle_request(State, [<<"CLUSTER">> | [Type | _Rest]]) ->
 
 handle_request(State, [<<"SET">>, Key, Value | _Tail]) ->
     ?DBG("SET request for key: ~p and value: ~p", [Key, Value]),
+    timer:sleep(State#state.delay),
     ets:insert(?STORAGE, {Key, Value}),
     Msg = fakeredis_encoder:encode(ok),
     send(State, Msg);
 
 handle_request(State, [<<"GET">>, Key | _Tail]) ->
     ?DBG("GET request for key: ~p", [Key]),
+    timer:sleep(State#state.delay),
     Value = case ets:lookup(?STORAGE, Key) of
                 [{Key, Val}] ->
                     Val;
