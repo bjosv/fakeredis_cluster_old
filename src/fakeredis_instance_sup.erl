@@ -27,6 +27,16 @@ init([Port, Options, MaxClients]) ->
     ?LOG("Start listening on port=~p [Options=~p MaxClients=~p]", [Port, Options, MaxClients]),
     ListenSocket = start_listen_socket(Port, ?TCP_OPTIONS),
 
+    %% Make sure the listen socket is properly closed when this
+    %% supervisor exits. Otherwise, we may get {error,eaddrinuse} if
+    %% we try listening on this port again later.
+    spawn_link(fun() ->
+                       process_flag(trap_exit, true),
+                       receive {'EXIT', _, _} ->
+                               gen_tcp:close(ListenSocket)
+                       end
+               end),
+
     spawn_link(fun() -> start_listeners(Port, MaxClients) end),
 
     SupFlags = #{strategy => simple_one_for_one,
