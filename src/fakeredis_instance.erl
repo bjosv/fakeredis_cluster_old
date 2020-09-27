@@ -68,8 +68,9 @@ handle_call(exit, _From, State) ->
 handle_call(_E, _From, State) -> {noreply, State}.
 
 %% TCP/TLS events
-handle_info({_, Socket, Data}, #state{socket = Socket,
-                                      transport = Transport} = State) ->
+handle_info({Tag, Socket, Data}, #state{socket = Socket,
+                                        transport = Transport} = State)
+  when Tag =:= tcp; Tag =:= ssl ->
     ok = setopts(Socket, Transport, [{active, once}]),
     {noreply, parse_data(Data, State)};
 handle_info({tcp_closed, _Socket}, State) -> {stop, normal, State};
