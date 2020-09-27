@@ -73,16 +73,22 @@ handle_info({Tag, Socket, Data}, #state{socket = Socket,
   when Tag =:= tcp; Tag =:= ssl ->
     ok = setopts(Socket, Transport, [{active, once}]),
     {noreply, parse_data(Data, State)};
-handle_info({tcp_closed, _Socket}, State) -> {stop, normal, State};
-handle_info({ssl_closed, _Socket}, State) -> {stop, normal, State};
+handle_info({tcp_closed, _Socket}, State) -> {stop, normal, State#state{socket = undefined}};
+handle_info({ssl_closed, _Socket}, State) -> {stop, normal, State#state{socket = undefined}};
 handle_info({tcp_error, _Socket, _Reason}, State) -> {stop, normal, State};
 handle_info({ssl_error, _Socket, _Reason}, State) -> {stop, normal, State};
 handle_info(E, State) ->
     ?ERR("unexpected: ~p (State: ~p)", [E, State]),
     {noreply, State}.
 
-terminate(Reason, _Tab) ->
-    ?DBG("fakeredis_intance:terminate(Reason=~p)", [Reason]),
+terminate(Reason, State) ->
+    case State of
+        #state{socket = undefined} -> ok;       % already closed
+        #state{transport = tcp, socket = Socket} -> gen_tcp:close(Socket);
+        #state{transport = tls, socket = Socket} -> ssl:close(Socket)
+    end,
+    ?DBG("fakeredis_intance:terminate(Reason=~p, Port=~p, ClientPort=~p)",
+         [Reason, State#state.local_port, State#state.remote_port]),
     ok.
 
 code_change(_OldVersion, Tab, _Extra) -> {ok, Tab}.
