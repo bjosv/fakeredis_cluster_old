@@ -16,7 +16,10 @@
                  remote_port,
                  delay,                         % Option {delay, Milliseconds},
                                                 % default 0, affects GET and SET
-                 parser_state
+                 parser_state,
+                 client_asking = false :: boolean()
+                                                % true if the previous
+                                                % command was ASKING
                }).
 
 start_link(ListenSocket, Options) ->
@@ -83,17 +86,18 @@ terminate(Reason, _Tab) ->
 
 code_change(_OldVersion, Tab, _Extra) -> {ok, Tab}.
 
+-spec parse_data(Data :: binary(), State :: #state{}) -> NewState :: #state{}.
 parse_data(Data, #state{parser_state = ParserState} = State) ->
     case fakeredis_parser:parse(ParserState, Data) of
         %% Got complete request
         {ok, Value, NewParserState} ->
-            handle_data(State, Value),
-            State#state{parser_state = NewParserState};
+            NewState = handle_data(Value, State),
+            NewState#state{parser_state = NewParserState};
 
         %% Got complete request, with extra data
         {ok, Value, Rest, NewParserState} ->
-            handle_data(State, Value),
-            parse_data(Rest, #state{parser_state = NewParserState});
+            NewState = handle_data(Value, State),
+            parse_data(Rest, NewState#state{parser_state = NewParserState});
 
         %% Parser needs more data
         {continue, NewParserState} ->
@@ -102,51 +106,111 @@ parse_data(Data, #state{parser_state = ParserState} = State) ->
         %% Error
         {error, unknown_response} ->
             ?ERR("Unknown data: ~p", [Data]),
-            {noreply, State}
+            State
     end.
 
 %% Make sure first command is in upper
-handle_data(State, [Cmd | Data]) ->
-    handle_request(State, lists:flatten([string:uppercase(Cmd), Data])).
+-spec handle_data(Command :: list(), #state{}) -> #state{}.
+handle_data([Cmd | Data], State) ->
+    CmdUpper = string:uppercase(Cmd),
+    handle_request([CmdUpper | Data], State),
+    %% Set flag indicating if the previous command was ASKING
+    State#state{client_asking = CmdUpper =:= <<"ASKING">>}.
 
-handle_request(State, [<<"CLUSTER">> | [Type | _Rest]]) ->
+handle_request([<<"CLUSTER">> | [Type | _Rest]], State) ->
     ?DBG("Requesting CLUSTER"),
     case string:uppercase(Type) of
         <<"SLOTS">> ->
             {ok, Msg} = gen_server:call(fakeredis_cluster, cluster_slots),
-            send(State, Msg);
+            send(Msg, State);
         _ ->
             ?ERR("Not handled cmd: CLUSTER ~p~n", [Type])
     end;
 
-handle_request(State, [<<"SET">>, Key, Value | _Tail]) ->
-    ?DBG("SET request for key: ~p and value: ~p", [Key, Value]),
-    timer:sleep(State#state.delay),
-    ets:insert(?STORAGE, {Key, Value}),
-    Msg = fakeredis_encoder:encode(ok),
-    send(State, Msg);
+handle_request([<<"SET">>, Key, Value | _Tail], State) ->
+    Response =
+        case check_redirect(Key, State) of
+            ok ->
+                %% Not a redirect. The key is served by us.
+                timer:sleep(State#state.delay),
+                ets:insert(?STORAGE, {Key, Value}),
+                ok;
+            {error, _RedirectMsg} = Error ->
+                Error
+        end,
+    EncodedResponse = fakeredis_encoder:encode(Response),
+    send(EncodedResponse, State);
 
-handle_request(State, [<<"GET">>, Key | _Tail]) ->
-    ?DBG("GET request for key: ~p", [Key]),
-    timer:sleep(State#state.delay),
-    Value = case ets:lookup(?STORAGE, Key) of
-                [{Key, Val}] ->
-                    Val;
-                [] ->
-                    null_bulkstring
-            end,
-    Msg = fakeredis_encoder:encode(Value),
-    send(State, Msg).
+handle_request([<<"GET">>, Key | _Tail], State) ->
+    Response =
+        case check_redirect(Key, State) of
+            ok ->
+                %% Not a redirect. The key is served by us.
+                timer:sleep(State#state.delay),
+                case ets:lookup(?STORAGE, Key) of
+                    [{Key, Val}] ->
+                        Val;
+                    [] ->
+                        null_bulkstring
+                end;
+            {error, _RedirectMsg} = Error ->
+                Error
+        end,
+    EncodedResponse = fakeredis_encoder:encode(Response),
+    send(EncodedResponse, State);
+
+handle_request([<<"ASKING">>], State) ->
+    %% The client_asking flag is handled by handle_data/2.
+    send(<<"+OK\r\n">>, State);
+
+handle_request([Cmd | _Tail], State) ->
+    send(<<"-UNKNOWN command ", Cmd/binary, ", but this is fakeredis.\r\n">>,
+         State).
+
+%% Checks if a key is redirected to another node. Returns an error
+%% with a redirect encoded as a redis error response or ok if the
+%% request should be serverd by the current node.
+-spec check_redirect(Key :: binary(), State :: #state{}) ->
+          ok | {error, EncodedRedisError :: binary()}.
+check_redirect(Key, #state{local_port = LocalPort, client_asking = Asking}) ->
+    case fakeredis_cluster:get_redirect_by_key(Key) of
+        {moved, _Slot, _Addr, LocalPort} ->
+            %% The slot belongs to the current node.
+            ok;
+        {ask, _Slot, _Addr, LocalPort} when Asking ->
+            %% There is an ASK redirect to the current node for this
+            %% key and the client is asking properly.
+            ok;
+        {ask, Slot, _Addr, LocalPort} when not Asking ->
+            %% This node has the key, but the client didn't ask
+            %% properly.  Redirect back to the node which would
+            %% normally serve this slot.
+            {Addr, Port} = fakeredis_cluster:get_node_by_slot(Slot),
+            {error, encode_redirect({moved, Slot, Addr, Port})};
+        Redirect ->
+            %% ASK or MOVED to another node
+            {error, encode_redirect(Redirect)}
+    end.
+
+%% Encodes a redirect tuple as a binary message. The "-" prefix is not
+%% added.
+encode_redirect({Redirect, Slot, Addr, Port}) ->
+    Tag = case Redirect of
+              ask   -> <<"ASK">>;
+              moved -> <<"MOVED">>
+          end,
+    <<Tag/binary, " ", (integer_to_binary(Slot))/binary, " ",
+      Addr/binary, ":", (integer_to_binary(Port))/binary>>.
 
 setopts(Socket, tcp, Opts) -> inet:setopts(Socket, Opts);
 setopts(Socket, tls, Opts) ->  ssl:setopts(Socket, Opts).
 
-send(State, Str) when State#state.transport == tls ->
+send(Str, State) when State#state.transport == tls ->
     ?DBG("SEND: ~p", [Str]),
     ok = ssl:send(State#state.socket, Str),
     ssl:setopts(State#state.socket, [{active, once}]);
 
-send(State, Str) ->
+send(Str, State) ->
     ?DBG("SEND: ~p", [Str]),
     ok = gen_tcp:send(State#state.socket, Str),
     inet:setopts(State#state.socket, [{active, once}]).

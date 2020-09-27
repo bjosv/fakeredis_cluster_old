@@ -12,6 +12,8 @@
         , t_start_masters_only/1
         , t_start_masters_with_single_replica/1
         , t_start_masters_with_2_replicas/1
+        , t_moved_redirect/1
+        , t_ask_redirect/1
         ]).
 
 -include_lib("common_test/include/ct.hrl").
@@ -96,3 +98,112 @@ t_start_masters_with_2_replicas(Config) when is_list(Config) ->
     ok = gen_tcp:send(Sock, Data),
     {ok, _Data} = gen_tcp:recv(Sock, 0),
     ok = gen_tcp:close(Sock).
+
+t_moved_redirect(Config) when is_list(Config) ->
+    ClusterPorts = [20040, 20041, 20042],
+    fakeredis_cluster:start_link(ClusterPorts),
+
+    Key  = <<"foo">>,
+    Slot = 12182 = fakeredis_hash:hash(Key),
+    {Addr, SlotPort} = fakeredis_cluster:get_node_by_slot(Slot),
+    [DifferentPort | _] = [P || P <- ClusterPorts,
+                                P =/= SlotPort],
+
+    %% Check that the results of
+    %% fakeredis_cluster:get_redirect_by_key/1 and
+    %% fakeredis_cluster:get_node_by_slot/1 are consistent.
+    ?assertEqual({moved, Slot, Addr, SlotPort},
+                 fakeredis_cluster:get_redirect_by_key(<<"foo">>)),
+
+    %% Check what's returned by the correct node and a different node respectively.
+    ExpectedMovedRedirect = <<"-MOVED ", (integer_to_binary(Slot))/binary, " ",
+                              Addr/binary, ":",
+                              (integer_to_binary(SlotPort))/binary, ?NL>>,
+
+    TcpOpts = [binary, {active, false}, {packet, 0}],
+    {ok, SlotSock}      = gen_tcp:connect("localhost", SlotPort,      TcpOpts),
+    {ok, DifferentSock} = gen_tcp:connect("localhost", DifferentPort, TcpOpts),
+
+    %% SET
+    SetReq = fakeredis_encoder:encode([<<"SET">>, <<"foo">>, <<"bar">>]),
+    ok = gen_tcp:send(DifferentSock, SetReq),
+    {ok, WrongNodeSetResp} = gen_tcp:recv(DifferentSock, 0),
+
+    ok = gen_tcp:send(SlotSock, SetReq),
+    {ok, CorrectNodeSetResp} = gen_tcp:recv(SlotSock, 0),
+
+    ?assertEqual(ExpectedMovedRedirect, WrongNodeSetResp),
+    ?assertEqual(<<"+OK\r\n">>, CorrectNodeSetResp),
+
+    %% GET
+    GetReq = fakeredis_encoder:encode([<<"GET">>, <<"foo">>]),
+    ok = gen_tcp:send(DifferentSock, GetReq),
+    {ok, WrongNodeGetResp} = gen_tcp:recv(DifferentSock, 0),
+
+    ok = gen_tcp:send(SlotSock, GetReq),
+    {ok, CorrectNodeGetResp} = gen_tcp:recv(SlotSock, 0),
+
+    ?assertEqual(ExpectedMovedRedirect, WrongNodeGetResp),
+    ?assertEqual(<<"$3\r\nbar\r\n">>, CorrectNodeGetResp),
+
+    ok = gen_tcp:close(SlotSock),
+    ok = gen_tcp:close(DifferentSock).
+
+t_ask_redirect(Config) when is_list(Config) ->
+    ClusterPorts = [20040, 20041, 20042],
+    fakeredis_cluster:start_link(ClusterPorts),
+
+    Key  = <<"foo">>,
+    Slot = 12182 = fakeredis_hash:hash(Key),
+    {Addr, SlotPort} = fakeredis_cluster:get_node_by_slot(Slot),
+    [DifferentPort | _] = [P || P <- ClusterPorts,
+                                P =/= SlotPort],
+
+    TcpOpts = [binary, {active, false}, {packet, 0}],
+    {ok, SlotSock}      = gen_tcp:connect("localhost", SlotPort,      TcpOpts),
+    {ok, DifferentSock} = gen_tcp:connect("localhost", DifferentPort, TcpOpts),
+
+    %% Set some data before the ASK redirect is created
+    SetReq = fakeredis_encoder:encode([<<"SET">>, <<"foo">>, <<"bar">>]),
+    ok = gen_tcp:send(SlotSock, SetReq),
+    ?assertEqual({ok, <<"+OK\r\n">>}, gen_tcp:recv(SlotSock, 0)),
+
+    %% Create the ASK redirect
+    fakeredis_cluster:set_ask_redirect(Key, Addr, DifferentPort),
+
+    %% Check fakeredis_cluster:get_redirect_by_key/1.
+    ?assertEqual({ask, Slot, Addr, DifferentPort},
+                 fakeredis_cluster:get_redirect_by_key(<<"foo">>)),
+
+    %% Check that a MOVED redirect is returned by the new host node if
+    %% the client isn't ASKING properly.
+    GetReq = fakeredis_encoder:encode([<<"GET">>, <<"foo">>]),
+    ok = gen_tcp:send(DifferentSock, GetReq),
+    ?assertEqual({ok, <<"-MOVED ", (integer_to_binary(Slot))/binary, " ",
+                        Addr/binary, ":",
+                        (integer_to_binary(SlotPort))/binary, ?NL>>},
+                 gen_tcp:recv(DifferentSock, 0)),
+
+    %% Check that the slot mapped node returns an ASK redirect
+    ok = gen_tcp:send(SlotSock, GetReq),
+    ?assertEqual({ok, <<"-ASK ", (integer_to_binary(Slot))/binary, " ",
+                        Addr/binary, ":",
+                        (integer_to_binary(DifferentPort))/binary, ?NL>>},
+                 gen_tcp:recv(SlotSock, 0)),
+
+    %% Check that the new node returns the value when ASKING properly.
+    AskingReq = fakeredis_encoder:encode([<<"ASKING">>]),
+    ok = gen_tcp:send(DifferentSock, [AskingReq, GetReq]),
+    ?assertEqual({ok, <<"+OK\r\n">>},
+                 gen_tcp:recv(DifferentSock, 0)),
+    ?assertEqual({ok, <<"$3\r\nbar\r\n">>},
+                 gen_tcp:recv(DifferentSock, 0)),
+
+    %% Delete the directect and check that fakeredis_cluster directs
+    %% the key back to the original node for the slot.
+    fakeredis_cluster:delete_ask_redirect(Key),
+    ?assertEqual({moved, Slot, Addr, SlotPort},
+                 fakeredis_cluster:get_redirect_by_key(Key)),
+
+    ok = gen_tcp:close(SlotSock),
+    ok = gen_tcp:close(DifferentSock).

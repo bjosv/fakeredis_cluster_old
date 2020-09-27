@@ -8,6 +8,10 @@
 
 -export([ start_instance/1
         , kill_instance/1
+        , get_redirect_by_key/1
+        , get_node_by_slot/1
+        , set_ask_redirect/3
+        , delete_ask_redirect/1
         ]).
 
 %% gen_server callbacks
@@ -17,6 +21,8 @@
                , options = []
                , node_map = #{}
                , slots_maps = []
+               , ask_redirects = #{} :: #{Key :: binary() => {Host :: binary(),
+                                                              Port :: inet:port_number()}}
                }).
 
 -define(DEFAULT_MAX_CLIENTS, 10).
@@ -37,6 +43,32 @@ start_instance(Port) ->
 
 kill_instance(Port) ->
     gen_server:call(?MODULE, {kill_instance, Port}).
+
+%% @doc Returns the node which serves a particular key. If there is an
+%% ASK redirect for the key, it is returned. Otherwise a MOVED
+%% redirect to the node serving the key's slot is returned.
+-spec get_redirect_by_key(Key :: binary()) ->
+          {Redirect :: ask | moved,
+           Slot     :: 0..16383,
+           Address  :: binary(),
+           Port     :: inet:port_number()}.
+get_redirect_by_key(Key) ->
+    gen_server:call(?MODULE, {get_redirect_by_key, Key}).
+
+%% @doc Returns the node which serves a slot.
+-spec get_node_by_slot(Slot :: 0..16383) -> {Address :: binary(),
+                                             Port    :: inet:port_number()}.
+get_node_by_slot(Slot) ->
+    gen_server:call(?MODULE, {get_node_by_slot, Slot}).
+
+%% @doc Creates an ASK redirect, i.e. assign key to a different node that what normally serves the key's slot.
+set_ask_redirect(Key, Address, Port) ->
+    gen_server:call(?MODULE, {set_ask_redirect, Key, Address, Port}).
+
+%% @doc Deletes an ASK redirect. This assigns the key back to the node
+%% which serves the slot of the key.
+delete_ask_redirect(Key) ->
+    gen_server:call(?MODULE, {delete_ask_redirect, Key}).
 
 %% escript Entry point
 main([]) ->
@@ -81,8 +113,54 @@ handle_call({kill_instance, Port}, _From, State) ->
     ?LOG("Stop port=~p, pids=~p", [Port, Pids]),
     [exit(Pid, kill) || Pid <- Pids],
     {reply, ok, State};
-handle_call(_E, _From, State) ->
-    {noreply, State}.
+handle_call({get_redirect_by_key, Key}, _From, State) ->
+    Slot = fakeredis_hash:hash(Key),
+    case State#state.ask_redirects of
+        #{Key := Id} ->
+            %% ASK redirect exists for this key
+            #node{address = Addr,
+                  port    = Port} = maps:get(Id, State#state.node_map),
+            {reply, {ask, Slot, Addr, Port}, State};
+        _NoAskRedirect ->
+            %% Use cluster slots map
+            #node{address = Addr, port = Port} = lookup_slot(Slot, State),
+            {reply, {moved, Slot, Addr, Port}, State}
+    end;
+handle_call({get_node_by_slot, Slot}, _From, State) when Slot >= 0,
+                                                         Slot < 16384 ->
+    #node{address = Addr,
+          port    = Port} = lookup_slot(Slot, State),
+    {reply, {Addr, Port}, State};
+handle_call({set_ask_redirect, Key, Addr, Port}, _From, State) ->
+    Slot = fakeredis_hash:hash(Key),
+    case lookup_slot(Slot, State) of
+        #node{address = Addr,
+              port    = Port} ->
+            {reply, {error, target_same_as_source}, State};
+        _SourceNode ->
+            Nodes = maps:values(State#state.node_map),
+            case [Id || #node{address   = Addr0,
+                              port      = Port0,
+                              id        = Id} <- Nodes,
+                        Addr0 =:= Addr,
+                        Port0 =:= Port] of
+                [TargetNodeId] ->
+                    NewAskRedirects = (State#state.ask_redirects)#{Key => TargetNodeId},
+                    {reply, ok, State#state{ask_redirects = NewAskRedirects}};
+                [] ->
+                    {reply, {error, node_not_found}, State}
+            end
+    end;
+handle_call({delete_ask_redirect, Key}, _From,
+            #state{ask_redirects = AskRedirects} = State) ->
+    case maps:take(Key, AskRedirects) of
+        {_Value, RemainingMap} ->
+            {reply, ok, State#state{ask_redirects = RemainingMap}};
+        error ->
+            {reply, error, State}
+    end;
+handle_call(_Req, _From, State) ->
+    {reply, {error, bad_call}, State}.
 
 handle_info(_E, State) -> {noreply, State}.
 
@@ -169,3 +247,13 @@ get_cluster_nodes(SlotsMap, NodeMap, SlaveIds) ->
     [[Node#node.address,
       Node#node.port,
       Node#node.id] || Node <- [Master] ++ Replicas].
+
+-spec lookup_slot(Slot :: 0..16383, #state{}) -> #node{}.
+lookup_slot(Slot, #state{slots_maps = SlotsMaps,
+                         node_map   = NodeMap}) ->
+    [Id] = [MasterId || #slots_map{start_slot = Start,
+                                   end_slot   = End,
+                                   master_id  = MasterId} <- SlotsMaps,
+                        Start =< Slot,
+                        Slot =< End],
+    maps:get(Id, NodeMap).

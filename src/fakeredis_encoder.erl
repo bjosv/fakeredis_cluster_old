@@ -29,6 +29,8 @@ encode(null_array) ->
 
 %% RESP Simple Strings
 encode(T) when is_atom(T) ->
-    ["+", string:uppercase(atom_to_list(T)), ?NL].
+    ["+", string:uppercase(atom_to_list(T)), ?NL];
 
-%% RESP Errors: TODO
+%% RESP Errors
+encode({error, Message}) when is_binary(Message) ->
+    ["-", Message, ?NL].
