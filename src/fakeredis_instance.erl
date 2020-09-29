@@ -47,7 +47,13 @@ init([ListenSocket, Options]) ->
                                         end
                                 end,
     setopts(ActiveSocket, Transport, [{active, once}]),
-    ?DBG("Client ~p:~p using ~p accepted...", [RemoteAddress, RemotePort, Transport]),
+    ?DBG("Client ~s:~p connected to ~s:~p.",
+         [inet:ntoa(RemoteAddress), RemotePort, inet:ntoa(LocalAddress), LocalPort]),
+    fakeredis_cluster:log_event(connect, #{local_address  => LocalAddress,
+                                           local_port     => LocalPort,
+                                           remote_address => RemoteAddress,
+                                           remote_port    => RemotePort,
+                                           transport      => Transport}),
 
     Delay = proplists:get_value(delay, Options, 0),
     gen_server:enter_loop(?MODULE, [], #state{socket = ActiveSocket,
@@ -118,20 +124,22 @@ parse_data(Data, #state{parser_state = ParserState} = State) ->
 
 %% Make sure first command is in upper
 -spec handle_data(Command :: list(), #state{}) -> #state{}.
-handle_data([Cmd | Data], State) ->
+handle_data([Cmd | Args] = Data, State) ->
+    fakeredis_cluster:log_event(command, Data),
     CmdUpper = string:uppercase(Cmd),
-    handle_request([CmdUpper | Data], State),
+    handle_request([CmdUpper | Args], State),
     %% Set flag indicating if the previous command was ASKING
     State#state{client_asking = CmdUpper =:= <<"ASKING">>}.
 
-handle_request([<<"CLUSTER">> | [Type | _Rest]], State) ->
+handle_request([<<"CLUSTER">>, Type | _Rest], State) ->
     ?DBG("Requesting CLUSTER"),
     case string:uppercase(Type) of
         <<"SLOTS">> ->
             {ok, Msg} = gen_server:call(fakeredis_cluster, cluster_slots),
-            send(Msg, State);
+            encode_and_send(Msg, State);
         _ ->
-            ?ERR("Not handled cmd: CLUSTER ~p~n", [Type])
+            encode_and_send({error, <<"Command not handled: CLUSTER ", Type/binary>>},
+                            State)
     end;
 
 handle_request([<<"SET">>, Key, Value | _Tail], State) ->
@@ -145,8 +153,7 @@ handle_request([<<"SET">>, Key, Value | _Tail], State) ->
             {error, _RedirectMsg} = Error ->
                 Error
         end,
-    EncodedResponse = fakeredis_encoder:encode(Response),
-    send(EncodedResponse, State);
+    encode_and_send(Response, State);
 
 handle_request([<<"GET">>, Key | _Tail], State) ->
     Response =
@@ -163,16 +170,16 @@ handle_request([<<"GET">>, Key | _Tail], State) ->
             {error, _RedirectMsg} = Error ->
                 Error
         end,
-    EncodedResponse = fakeredis_encoder:encode(Response),
-    send(EncodedResponse, State);
+    encode_and_send(Response, State);
 
 handle_request([<<"ASKING">>], State) ->
     %% The client_asking flag is handled by handle_data/2.
-    send(<<"+OK\r\n">>, State);
+    encode_and_send(ok, State);
 
 handle_request([Cmd | _Tail], State) ->
-    send(<<"-UNKNOWN command ", Cmd/binary, ", but this is fakeredis.\r\n">>,
-         State).
+    encode_and_send({error, <<"Unknown command ", Cmd/binary,
+                              " (but this is fakeredis...)">>},
+                    State).
 
 %% Checks if a key is redirected to another node. Returns an error
 %% with a redirect encoded as a redis error response or ok if the
@@ -212,12 +219,15 @@ encode_redirect({Redirect, Slot, Addr, Port}) ->
 setopts(Socket, tcp, Opts) -> inet:setopts(Socket, Opts);
 setopts(Socket, tls, Opts) ->  ssl:setopts(Socket, Opts).
 
-send(Str, State) when State#state.transport == tls ->
-    ?DBG("SEND: ~p", [Str]),
-    ok = ssl:send(State#state.socket, Str),
-    ssl:setopts(State#state.socket, [{active, once}]);
-
-send(Str, State) ->
-    ?DBG("SEND: ~p", [Str]),
-    ok = gen_tcp:send(State#state.socket, Str),
-    inet:setopts(State#state.socket, [{active, once}]).
+%% Redis-encodes and sends data (a reply to a command) to the client
+encode_and_send(Data, State) ->
+    fakeredis_cluster:log_event(reply, Data),
+    Encoded = fakeredis_encoder:encode(Data),
+    case State#state.transport of
+        tls ->
+            ok = ssl:send(State#state.socket, Encoded),
+            ssl:setopts(State#state.socket, [{active, once}]);
+        tcp ->
+            ok = gen_tcp:send(State#state.socket, Encoded),
+            inet:setopts(State#state.socket, [{active, once}])
+    end.

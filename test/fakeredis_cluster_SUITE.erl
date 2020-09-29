@@ -61,7 +61,18 @@ t_cluster_slots(Config) when is_list(Config) ->
                                  [binary, {active , false}, {packet, 0}]),
     ok = gen_tcp:send(Sock2, Data),
     {ok, _Data} = gen_tcp:recv(Sock2, 0),
-    ok = gen_tcp:close(Sock2).
+    ok = gen_tcp:close(Sock2),
+
+    %% Check event log, mostly to check that the event log functionality works.
+    ?assertMatch([{Connection1, connect, _},
+                  {Connection1, command, [<<"cluster">>, <<"slots">>]},
+                  {Connection1, reply, _},
+                  {Connection2, connect, _},
+                  {Connection2, command, [<<"cluster">>, <<"slots">>]},
+                  {Connection2, reply, _}],
+                 fakeredis_cluster:get_event_log()),
+    ok = fakeredis_cluster:clear_event_log(),
+    [] = fakeredis_cluster:get_event_log().
 
 t_start_masters_only(Config) when is_list(Config) ->
     fakeredis_cluster:start_link([20010, 20020, 20030]),

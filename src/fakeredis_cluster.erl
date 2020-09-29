@@ -12,10 +12,19 @@
         , get_node_by_slot/1
         , set_ask_redirect/3
         , delete_ask_redirect/1
+        , get_event_log/0
+        , clear_event_log/0
         ]).
+
+%% Internal, called by e.g. fakeredis_instance
+-export([log_event/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_cast/2, handle_info/2, handle_call/3, terminate/2, code_change/3]).
+
+-type event_log_entry() :: {ConnectionId :: binary(),
+                            EventType    :: connect | command | reply,
+                            Data         :: any()}.
 
 -record(state, { max_clients = 0
                , options = []
@@ -23,6 +32,7 @@
                , slots_maps = []
                , ask_redirects = #{} :: #{Key :: binary() => {Host :: binary(),
                                                               Port :: inet:port_number()}}
+               , event_log = []      :: [event_log_entry()]
                }).
 
 -define(DEFAULT_MAX_CLIENTS, 10).
@@ -70,6 +80,14 @@ set_ask_redirect(Key, Address, Port) ->
 delete_ask_redirect(Key) ->
     gen_server:call(?MODULE, {delete_ask_redirect, Key}).
 
+-spec get_event_log() -> [event_log_entry()].
+get_event_log() ->
+    gen_server:call(?MODULE, get_event_log).
+
+-spec clear_event_log() -> ok.
+clear_event_log() ->
+    gen_server:call(?MODULE, clear_event_log).
+
 %% escript Entry point
 main([]) ->
     DefaultPorts = [{20010, 20011}, {20020, 20021}, {20030, 20031}],
@@ -85,6 +103,20 @@ main_(Ports) ->
 
 %% Internals
 
+%% Called by fakeredis_instance
+-spec log_event(connect, map())      -> ok;
+               (command, [binary()]) -> ok;
+               (reply, any())        -> ok.
+log_event(EventType, Data) ->
+    %% A hash of the caller's pid uniquely represents a connection
+    ConnectionId = binary:part(
+                     base64:encode(
+                       crypto:hash(sha, term_to_binary(self()))),
+                     0, 6),
+    gen_server:cast(?MODULE, {log_event, {ConnectionId, EventType, Data}}).
+
+%% gen_server callbacks
+
 init([Ports, Options, MaxClients]) ->
     ets:new(?STORAGE, [public, set, named_table, {read_concurrency, true}]),
     {NodeMap, SlotsMaps0} = parse_port_args(Ports),
@@ -96,16 +128,17 @@ init([Ports, Options, MaxClients]) ->
                 node_map = NodeMap,
                 slots_maps = SlotsMaps}}.
 
+handle_cast({log_event, Event}, #state{event_log = Log} = State) ->
+    {noreply, State#state{event_log = [Event | Log]}};
 handle_cast(_, State) ->
     {noreply, State}.
 
 handle_call(cluster_slots, _From, State) ->
     ?LOG("Handling a CLUSTER SLOTS request"),
-    Msg = fakeredis_encoder:encode(create_cluster_slots_resp(State)),
-    {reply, {ok, Msg}, State};
+    {reply, {ok, create_cluster_slots_resp(State)}, State};
 handle_call({start_instance, Port}, _From, #state{max_clients = MaxClients} = State) ->
     ?LOG("start_instance: ~p", [Port]),
-    fakeredis_instance_sup:start_listeners(Port, MaxClients),
+    fakeredis_instance_sup:start_acceptors(Port, MaxClients),
     {reply, ok, State};
 handle_call({kill_instance, Port}, _From, State) ->
     ?LOG("kill_instance: ~p", [Port]),
@@ -159,6 +192,10 @@ handle_call({delete_ask_redirect, Key}, _From,
         error ->
             {reply, error, State}
     end;
+handle_call(get_event_log, _From, State) ->
+    {reply, lists:reverse(State#state.event_log), State};
+handle_call(clear_event_log, _From, State) ->
+    {reply, ok, State#state{event_log = []}};
 handle_call(_Req, _From, State) ->
     {reply, {error, bad_call}, State}.
 
