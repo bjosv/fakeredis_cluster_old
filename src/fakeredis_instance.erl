@@ -29,9 +29,7 @@ init([ListenSocket, Options]) ->
     {ok, {LocalAddress, LocalPort}} = inet:sockname(ListenSocket),
     gproc:reg({p, l, {local, LocalPort}}),
     ok = proc_lib:init_ack({ok, self()}), %% Avoid block in accept/1
-    ?DBG("Listening on ~p:~p", [LocalAddress, LocalPort]),
-
-    ?DBG("Waiting for client to accept..."),
+    %%?DBG("Waiting for client on ~s:~p...", [inet:ntoa(LocalAddress), LocalPort]),
     {ok, Socket} = gen_tcp:accept(ListenSocket),
     {ok, {RemoteAddress, RemotePort}} = inet:peername(Socket),
     gproc:reg({n, l, {remote, RemoteAddress, RemotePort}}),

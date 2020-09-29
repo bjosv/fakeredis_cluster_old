@@ -5,7 +5,7 @@
 
 %% API
 -export([start_link/3]).
--export([start_listeners/2]).
+-export([start_acceptors/2]).
 
 %% Supervisor callback
 -export([init/1]).
@@ -37,7 +37,7 @@ init([Port, Options, MaxClients]) ->
                        end
                end),
 
-    spawn_link(fun() -> start_listeners(Port, MaxClients) end),
+    spawn_link(fun() -> start_acceptors(Port, MaxClients) end),
 
     SupFlags = #{strategy => simple_one_for_one,
                  intensity => 0,
@@ -54,15 +54,17 @@ start_listen_socket(Port, Options) ->
         {error, Reason} -> exit({listen_err, Reason})
     end.
 
-start_listener(Port) ->
+start_acceptor(Port) ->
     supervisor:start_child(?SERVER(Port), []).
 
-start_listeners(Port, N) ->
+start_acceptors(Port, N) ->
     case proplists:get_value(active, supervisor:count_children(?SERVER(Port))) of
         A when N>A ->
-            ?DBG("Starting ~p listeners (N:~p, Active:~p)", [N-A, N, A]),
-            [start_listener(Port) || _ <- lists:seq(1, N-A)];
+            ?DBG("Starting ~p acceptors on port ~p (N:~p, Active:~p)",
+                 [Port, N-A, N, A]),
+            [start_acceptor(Port) || _ <- lists:seq(1, N-A)];
         A ->
-            ?ERR("Max amount of listeners already started (N:~p, Active:~p)", [N, A])
+            ?ERR("Max amount of acceptors already started for port ~p (N:~p, Active:~p)",
+                 [Port, N, A])
     end,
     ok.
