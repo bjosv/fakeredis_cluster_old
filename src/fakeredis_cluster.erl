@@ -113,9 +113,10 @@ main_(Ports) ->
 %% Internals
 
 %% Called by fakeredis_instance
--spec log_event(connect, map())      -> ok;
-               (command, [binary()]) -> ok;
-               (reply, any())        -> ok.
+-spec log_event(connect, map())                       -> ok;
+               (disconnect, normal | {error, term()}) -> ok;
+               (command, [binary()])                  -> ok;
+               (reply, any())                         -> ok.
 log_event(EventType, Data) ->
     %% A hash of the caller's pid uniquely represents a connection
     ConnectionId = binary:part(

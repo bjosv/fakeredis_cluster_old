@@ -56,7 +56,6 @@ t_cluster_slots(Config) when is_list(Config) ->
 
     %% Restart instance
     fakeredis_cluster:start_instance(30001),
-    fakeredis_cluster:start_instance(30001),
     {ok, Sock2} = gen_tcp:connect("localhost", 30001,
                                  [binary, {active , false}, {packet, 0}]),
     ok = gen_tcp:send(Sock2, Data),
@@ -64,12 +63,15 @@ t_cluster_slots(Config) when is_list(Config) ->
     ok = gen_tcp:close(Sock2),
 
     %% Check event log, mostly to check that the event log functionality works.
+    timer:sleep(100),
     ?assertMatch([{Connection1, connect, _},
                   {Connection1, command, [<<"cluster">>, <<"slots">>]},
                   {Connection1, reply, _},
                   {Connection2, connect, _},
                   {Connection2, command, [<<"cluster">>, <<"slots">>]},
-                  {Connection2, reply, _}],
+                  {Connection2, reply, _},
+                  {Connection2, disconnect, normal}
+                 ],
                  fakeredis_cluster:get_event_log()),
     ok = fakeredis_cluster:clear_event_log(),
     [] = fakeredis_cluster:get_event_log().
