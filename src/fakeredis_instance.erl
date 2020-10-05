@@ -81,10 +81,14 @@ handle_info({Tag, Socket, Data}, #state{socket = Socket,
   when Tag =:= tcp; Tag =:= ssl ->
     ok = setopts(Socket, Transport, [{active, once}]),
     {noreply, parse_data(Data, State)};
-handle_info({tcp_closed, _Socket}, State) -> {stop, normal, State#state{socket = undefined}};
-handle_info({ssl_closed, _Socket}, State) -> {stop, normal, State#state{socket = undefined}};
-handle_info({tcp_error, _Socket, _Reason}, State) -> {stop, normal, State};
-handle_info({ssl_error, _Socket, _Reason}, State) -> {stop, normal, State};
+handle_info({Closed, _Socket}, State)
+  when Closed =:= tcp_closed; Closed =:= ssl_closed ->
+    fakeredis_cluster:log_event(disconnect, normal),
+    {stop, normal, State#state{socket = undefined}};
+handle_info({Error, _Socket, Reason}, State)
+  when Error =:= tcp_error; Error =:= ssl_error ->
+    fakeredis_cluster:log_event(disconnect, {error, Reason}),
+    {stop, normal, State};
 handle_info(E, State) ->
     ?ERR("unexpected: ~p (State: ~p)", [E, State]),
     {noreply, State}.
