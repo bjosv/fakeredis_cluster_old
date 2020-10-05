@@ -14,12 +14,16 @@
                  local_port,
                  remote_address,
                  remote_port,
-                 delay,                         % Option {delay, Milliseconds},
-                                                % default 0, affects GET and SET
+
+                 %% Delay per command in milliseconds if a map is
+                 %% given. The commands must be given in uppercase.
+                 %% If only a number is given, it affects GET and SET.
+                 delay = 0             :: timeout() |
+                                          #{binary() => timeout()},
                  parser_state,
+
+                 %% true if the previous command was ASKING
                  client_asking = false :: boolean()
-                                                % true if the previous
-                                                % command was ASKING
                }).
 
 start_link(ListenSocket, Options) ->
@@ -123,8 +127,9 @@ parse_data(Data, #state{parser_state = ParserState} = State) ->
 %% Make sure first command is in upper
 -spec handle_data(Command :: list(), #state{}) -> #state{}.
 handle_data([Cmd | Args] = Data, State) ->
-    fakeredis_cluster:log_event(command, Data),
     CmdUpper = string:uppercase(Cmd),
+    command_delay(CmdUpper, State),
+    fakeredis_cluster:log_event(command, Data),
     handle_request([CmdUpper | Args], State),
     %% Set flag indicating if the previous command was ASKING
     State#state{client_asking = CmdUpper =:= <<"ASKING">>}.
@@ -145,7 +150,6 @@ handle_request([<<"SET">>, Key, Value | _Tail], State) ->
         case check_redirect(Key, State) of
             ok ->
                 %% Not a redirect. The key is served by us.
-                timer:sleep(State#state.delay),
                 ets:insert(?STORAGE, {Key, Value}),
                 ok;
             {error, _RedirectMsg} = Error ->
@@ -158,7 +162,6 @@ handle_request([<<"GET">>, Key | _Tail], State) ->
         case check_redirect(Key, State) of
             ok ->
                 %% Not a redirect. The key is served by us.
-                timer:sleep(State#state.delay),
                 case ets:lookup(?STORAGE, Key) of
                     [{Key, Val}] ->
                         Val;
@@ -229,3 +232,21 @@ encode_and_send(Data, State) ->
             ok = gen_tcp:send(State#state.socket, Encoded),
             inet:setopts(State#state.socket, [{active, once}])
     end.
+
+%% Sleeps for a number of milliseconds as configured for the given command
+command_delay(Command, #state{delay = CommandDelay})
+  when is_map(CommandDelay) ->
+    %% Delay by command
+    case CommandDelay of
+        #{Command := Delay} ->
+            timer:sleep(Delay);
+        _NoMatch ->
+            ok
+    end;
+command_delay(Command, #state{delay = Delay})
+  when is_integer(Delay) orelse Delay =:= infinity,
+       Command =:= <<"GET">> orelse Command =:= <<"SET">> ->
+    %% Old numeric delay option affects GET and SET
+    timer:sleep(Delay);
+command_delay(_Command, _State) ->
+    ok.
