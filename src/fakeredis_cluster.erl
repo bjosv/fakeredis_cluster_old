@@ -10,6 +10,7 @@
         , kill_instance/1
         , get_redirect_by_key/1
         , get_node_by_slot/1
+        , move_all_slots/0
         , set_ask_redirect/3
         , delete_ask_redirect/1
         , get_event_log/0
@@ -70,6 +71,14 @@ get_redirect_by_key(Key) ->
                                              Port    :: inet:port_number()}.
 get_node_by_slot(Slot) ->
     gen_server:call(?MODULE, {get_node_by_slot, Slot}).
+
+%% @doc Shifts all slot mappings so that every slot range will be
+%% serverd by the node which previously served the next slot range. In
+%% practive, every slot will be served by a different node. Doesn't
+%% affect ASK redirects.
+-spec move_all_slots() -> ok.
+move_all_slots() ->
+    gen_server:call(?MODULE, move_all_slots).
 
 %% @doc Creates an ASK redirect, i.e. assign key to a different node that what normally serves the key's slot.
 set_ask_redirect(Key, Address, Port) ->
@@ -164,6 +173,9 @@ handle_call({get_node_by_slot, Slot}, _From, State) when Slot >= 0,
     #node{address = Addr,
           port    = Port} = lookup_slot(Slot, State),
     {reply, {Addr, Port}, State};
+handle_call(move_all_slots, _From,
+            #state{slots_maps = M} = State) ->
+    {reply, ok, State#state{slots_maps = move_all_slots(M)}};
 handle_call({set_ask_redirect, Key, Addr, Port}, _From, State) ->
     Slot = fakeredis_hash:hash(Key),
     case lookup_slot(Slot, State) of
@@ -294,3 +306,50 @@ lookup_slot(Slot, #state{slots_maps = SlotsMaps,
                         Start =< Slot,
                         Slot =< End],
     maps:get(Id, NodeMap).
+
+%% Shifts the master and slave ids so that each slot range will have
+%% the master and slaves of the next range in a list of #slots_maps{}.
+move_all_slots(SlotsMaps) ->
+    move_all_slots(SlotsMaps, hd(SlotsMaps)).
+
+move_all_slots([This | [#slots_map{master_id = NextMasterId,
+                                   slave_ids = NextSlaveIds} | _] = Rest],
+               First) ->
+    [This#slots_map{master_id = NextMasterId,
+                    slave_ids = NextSlaveIds}
+    | move_all_slots(Rest, First)];
+move_all_slots([Last], #slots_map{master_id = FirstMasterId,
+                                  slave_ids = FirstSlaveIds}) ->
+    [Last#slots_map{master_id = FirstMasterId,
+                    slave_ids = FirstSlaveIds}].
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+move_all_slots_test() ->
+    ?assertEqual(
+       [#slots_map{start_slot = 0,
+                   end_slot = 1000,
+                   master_id = <<2>>,
+                   slave_ids = [<<201>>, <<202>>]},
+        #slots_map{start_slot = 1001,
+                   end_slot = 2000,
+                   master_id = <<3>>,
+                   slave_ids = undefined},
+        #slots_map{start_slot = 2001,
+                   end_slot = 16383,
+                   master_id = <<1>>,
+                   slave_ids = undefined}],
+       move_all_slots([#slots_map{start_slot = 0,
+                                  end_slot = 1000,
+                                  master_id = <<1>>,
+                                  slave_ids = undefined},
+                       #slots_map{start_slot = 1001,
+                                  end_slot = 2000,
+                                  master_id = <<2>>,
+                                  slave_ids = [<<201>>, <<202>>]},
+                       #slots_map{start_slot = 2001,
+                                  end_slot = 16383,
+                                  master_id = <<3>>,
+                                  slave_ids = undefined}])).
+-endif.
