@@ -1,4 +1,6 @@
-# fakeredis_cluster
+# DEPRECATED: fakeredis_cluster
+
+This repo has been moved to https://github.com/Nordix/fakeredis_cluster
 
 ## Build
 
